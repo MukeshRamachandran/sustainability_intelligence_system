@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Admin Review Queue — K-COSMOS Portal</title><link rel="stylesheet" href="styles.css"></head>
+<body data-auth-role="microcosm_admin" data-login-page="admin-login.html">
+  <div class="app-container">
+    <aside class="sidebar"><div class="sidebar-header"><a href="admin-overview.html" class="sidebar-brand" style="display:flex;align-items:center;gap:10px;padding:4px 0;"><img src="kumaraguru-microcosm-logo.png" alt="MICROCOSM" style="height:auto;width:auto;max-height:48px;max-width:100%;"></a></div><nav class="sidebar-nav"><a href="admin-overview.html" class="nav-item">Admin Overview</a><a href="admin-queue.html" class="nav-item active">Approval Queue</a><a href="admin-evidence.html" class="nav-item">Evidence Repository</a><a href="admin-certificates.html" class="nav-item">Certificates</a><a href="admin-factors.html" class="nav-item">Emission Factors</a><a href="admin-preview.html" class="nav-item">Dashboard Preview</a><a href="admin-users.html" class="nav-item">Managers &amp; Access</a><a href="admin-audit.html" class="nav-item">Audit Log</a></nav></aside>
+    <main class="main-content">
+      <header class="topbar"><div class="topbar-left"><div class="current-period"><span>K-COSMOS</span><span>|</span><span>Administration</span></div></div><div class="topbar-right"><span class="user-badge">Admin</span><button class="btn btn-outline" id="logout-btn">Logout</button></div></header>
+      <div class="content-area">
+        <div class="mb-3"><h1>Admin Review Queue</h1><p>Review manager submissions without modifying manager-provided values.</p></div>
+        <div class="glass-card mb-3"><div class="d-flex justify-between align-center"><h3>Submissions awaiting review</h3><button class="btn btn-outline" id="refresh-queue">Refresh</button></div><div class="form-group"><label class="form-label" for="queue-period">Reporting period</label><select id="queue-period" class="form-control"></select></div><div class="table-responsive"><table class="table"><thead><tr><th>Domain</th><th>Submission</th><th>Period</th><th>Manager</th><th>Submitted</th><th>Status</th><th>Action</th></tr></thead><tbody id="queue-body"><tr><td colspan="7">Loading…</td></tr></tbody></table></div></div>
+        <div class="glass-card"><h3>Publication</h3><p class="text-muted">Approval does not publish. Prepare an immutable candidate, review it, then publish explicitly.</p><div class="grid-2"><div class="form-group"><label class="form-label" for="release-period">Approved reporting period</label><select id="release-period" class="form-control"></select></div><div class="form-group"><label class="form-label" for="release-version">Release version</label><input id="release-version" class="form-control" placeholder="sustainability-2026-09-v1"><p class="text-muted" style="margin:4px 0 0;font-size:12px;">Letters, digits, dots, underscores and hyphens only &mdash; no spaces or colons.</p></div></div><p id="release-error" class="text-danger" style="display:none;margin:0 0 12px;"></p><div class="card mb-2" id="publication-readiness"><div class="d-flex justify-between align-center"><strong id="readiness-period">Publication readiness</strong><span class="badge badge-draft" id="readiness-state">Loading</span></div><p id="readiness-count" style="margin:8px 0;">— / 6 Approved</p><div class="table-responsive"><table class="table"><thead><tr><th>Domain</th><th>Status</th><th>Revision</th></tr></thead><tbody><tr><td>Transport</td><td id="readiness-transport">—</td><td id="readiness-transport-revision">—</td></tr><tr><td>Energy</td><td id="readiness-energy">—</td><td id="readiness-energy-revision">—</td></tr><tr><td>LPG</td><td id="readiness-lpg">—</td><td id="readiness-lpg-revision">—</td></tr><tr><td>Water</td><td id="readiness-water">—</td><td id="readiness-water-revision">—</td></tr><tr><td>Outreach</td><td id="readiness-outreach">—</td><td id="readiness-outreach-revision">—</td></tr><tr><td>Waste</td><td id="readiness-waste">—</td><td id="readiness-waste-revision">—</td></tr></tbody></table></div><p class="text-muted" id="readiness-blockers" style="margin-bottom:0;">Checking approval status…</p></div><div class="card mb-2" id="release-state"><div class="d-flex justify-between align-center"><strong>Release for this period: <span id="release-state-version">—</span></strong><span class="badge badge-draft" id="release-state-badge">Checking</span></div><p class="text-muted" id="release-state-message" style="margin:8px 0 0;">Checking for an existing release…</p></div><div class="d-flex gap-2"><button class="btn btn-primary" id="prepare-release" disabled>Prepare release</button><button class="btn btn-accent" id="open-release" disabled>Open release preview</button></div><pre id="release-preview" style="white-space:pre-wrap;max-height:360px;overflow:auto;margin-top:16px;"></pre></div>
+      </div>
+    </main>
+  </div>
+  <div class="modal-overlay" id="details-modal"><div class="modal-content" style="max-width:960px;max-height:90vh;overflow:auto;"><div class="modal-header"><h2>Submission <span id="modal-sub-id"></span></h2><button class="btn-close" id="close-modal">&times;</button></div><div id="modal-data-container"></div><div id="modal-evidence-container"></div><div class="form-group"><label class="form-label" for="admin-comment">Correction reason</label><textarea id="admin-comment" class="form-control" rows="3"></textarea></div><div class="d-flex gap-2 justify-end"><button class="btn btn-outline" id="btn-under-review">Begin Review</button><button class="btn btn-warning" id="btn-correction">Request Correction</button><button class="btn btn-primary" id="btn-approve">Approve</button></div></div></div>
+  <script src="auth-client.js"></script><script src="role-auth.js"></script><script src="outreach-api.js"></script><script src="evidence-api.js"></script><script src="app.js"></script>
+  <script>
+    document.addEventListener('DOMContentLoaded', async () => {
+      const domains = ['transport', 'energy', 'lpg', 'water', 'outreach', 'waste'];
+      const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, character => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[character]));
+      let currentSubmission = null;
+      // Both are re-read from the backend on every load and period change;
+      // neither is ever persisted in the browser. The database is the authority.
+      let preparedRelease = null;
+      let periodReleases = [];
+      let releasesKnown = false;
+      let currentReadiness = null;
+      const modal = document.getElementById('details-modal');
+      try { await KCosmos.requireRole('microcosm_admin'); } catch (_) { return; }
+
+      function programmeHtml(programme) {
+        const ignored = new Set(['id', 'submission_id', 'created_at', 'updated_at']);
+        const fields = Object.entries(programme).filter(([key]) => !ignored.has(key));
+        return `<div class="card mb-3"><h3>${escapeHtml(programme.programme_name || 'Outreach programme')}</h3><div class="grid-2">${fields.map(([key,value]) => `<div><span class="text-muted">${escapeHtml(key.replaceAll('_',' '))}</span><br><strong>${escapeHtml(Array.isArray(value) ? JSON.stringify(value) : value ?? 'Not recorded')}</strong></div>`).join('')}</div></div>`;
+      }
+
+      /* What a source value is, where the code alone could mislead. */
+      const METRIC_NOTES = {
+        renewable_on_campus_kwh: 'Renewable electricity (source)',
+        renewable_procured_kwh: 'Renewable electricity (source)',
+        solar_water_heater_kwh: 'Solar thermal (source) — not electricity',
+        renewable_total_kwh: 'Legacy total incl. solar water heater — deprecated, as originally recorded, not used'
+      };
+
+      function metricsHtml(values) {
+        return `<div class="card mb-3"><h3>Manager-entered metrics</h3><div class="table-responsive"><table class="table"><thead><tr><th>Metric</th><th>Value</th><th>Unit</th><th>Quality note</th></tr></thead><tbody>${values.map(item => `<tr><td>${escapeHtml(item.metric_code)}${METRIC_NOTES[item.metric_code] ? `<br><small class="text-muted">${escapeHtml(METRIC_NOTES[item.metric_code])}</small>` : ''}</td><td>${escapeHtml(item.value ?? 'Not submitted')}</td><td>${escapeHtml(item.canonical_unit)}</td><td>${escapeHtml(item.quality_note || '—')}</td></tr>`).join('')}</tbody></table></div></div>`;
+      }
+
+      /* Energy submissions: the backend's read-only electrical indicators, and the solar water heater apart as thermal.
+         Renewable electricity is on-campus + procured only; a wrong figure is corrected through the Manager's source values. */
+      function energyHtml(energy) {
+        if (!energy) return '';
+        const indicator = item => !item || item.status !== 'available' || item.value == null
+          ? `Unavailable — ${(item?.reason || 'not calculated').replaceAll('_', ' ')}` : `${item.value} ${item.unit}`;
+        const rows = [
+          ['Renewable electricity total (on-campus + procured)', energy.renewable_electricity_kwh],
+          ['Total electricity (grid + renewable electricity)', energy.total_electricity_consumption_kwh],
+          ['Renewable share', energy.renewable_share_pct],
+          ['Electrical avoided emissions', energy.estimated_avoided_grid_emissions_tco2e]
+        ].map(([label, item]) => `<tr><td>${escapeHtml(label)}</td><td>${escapeHtml(indicator(item))}</td></tr>`).join('');
+        const thermal = energy.solar_thermal && energy.solar_thermal.value != null
+          ? `${energy.solar_thermal.value} ${energy.solar_thermal.unit}` : 'Not submitted';
+        return `<div class="card mb-3"><h3>Derived electrical values (read-only)</h3><div class="table-responsive"><table class="table"><thead><tr><th>Indicator</th><th>Backend result</th></tr></thead><tbody>${rows}</tbody></table></div><h3 style="margin-top:16px;">Solar thermal (separate from electricity)</h3><p><strong>Solar water heater:</strong> ${escapeHtml(thermal)} — thermal energy, not included in any electrical value above. No emission impact is calculated for it.</p></div>`;
+      }
+
+      function calculationsHtml(items) {
+        if (!items.length) return '';
+        /* Derived activity (kWh-based DG): source kWh x governed SFC = derived litres. Read-only; a correction is requested on the source kWh. */
+        const derivationText = item => item.derivation
+          ? `${item.derivation.source_value} ${item.derivation.source_unit} × ${item.derivation.parameter_value} ${item.derivation.parameter_unit} (${item.derivation.parameter_code}) = ${item.derivation.derived_value} ${item.derivation.derived_unit}`
+          : '—';
+        const activityText = item => item.activity_value == null ? '—' : `${item.activity_value} ${item.activity_unit || ''}`;
+        const rows = items.map(item => `<tr><td>${escapeHtml(item.calculation_code.replaceAll('_',' '))}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(activityText(item))}</td><td>${escapeHtml(derivationText(item))}</td><td>${escapeHtml(item.result_value ?? 'Unavailable')} ${escapeHtml(item.result_unit || '')}</td><td>${escapeHtml(item.factor_set_version || '—')}</td><td>${escapeHtml(item.factor_value ?? '—')} ${escapeHtml(item.factor_unit || '')}</td><td>${escapeHtml(item.reason ? item.reason.replaceAll('_',' ') : '—')}</td></tr>`).join('');
+        return `<div class="card mb-3"><h3>Authoritative calculations</h3><div class="table-responsive"><table class="table"><thead><tr><th>Calculation</th><th>Status</th><th>Manager-entered activity</th><th>Derived activity</th><th>Result</th><th>Factor set</th><th>Factor used</th><th>Reason</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+      }
+
+      function wasteHtml(waste) {
+        if (!waste) return '';
+        const kg = value => value === null || value === undefined ? 'Not submitted' : `${Number(value).toFixed(2)} kg`;
+        const summary = `<div class="grid-3 mb-3"><div><span class="text-muted">Wet Waste Generated</span><br><strong>${escapeHtml(kg(waste.wet_waste_generated_kg))}</strong></div><div><span class="text-muted">Dry Waste Generated</span><br><strong>${escapeHtml(kg(waste.dry_waste_generated_kg))}</strong></div><div><span class="text-muted">Total Waste Generated</span><br><strong>${escapeHtml(kg(waste.total_waste_generated_kg))}</strong></div></div>`
+          + `<p class="text-muted mb-3">Source: wet waste and the material quantities below. Derived by the backend (not editable): dry = sum of materials; total = wet + dry; diverted from landfill = dry; per person = total &divide; population.</p>`
+          + `<div class="grid-3 mb-3"><div><span class="text-muted">Waste Diverted from Landfill (derived)</span><br><strong>${escapeHtml(kg(waste.waste_diverted_from_landfill_kg))}</strong></div><div><span class="text-muted">Waste per Person (derived)</span><br><strong>${escapeHtml(waste.waste_per_capita_kg === null || waste.waste_per_capita_kg === undefined ? 'Unavailable (no population reference)' : `${Number(waste.waste_per_capita_kg).toFixed(4)} kg/person`)}</strong></div></div>`;
+        const items = waste.items || [];
+        if (!items.length) {
+          return `<div class="card mb-3"><h3>Waste inventory</h3>${summary}<p class="text-muted">No dry waste materials recorded for this month.</p></div>`;
+        }
+        // Grouped by the category the backend derived from each material.
+        const grouped = new Map();
+        for (const item of items) {
+          if (!grouped.has(item.category_display_name)) grouped.set(item.category_display_name, []);
+          grouped.get(item.category_display_name).push(item);
+        }
+        const totals = new Map((waste.categories || []).map(c => [c.display_name, c.quantity_kg]));
+        const rows = [...grouped.entries()].map(([category, materials]) =>
+          `<tr><td colspan="2" style="background:#f4f7f4;"><strong>${escapeHtml(category)}</strong></td><td style="background:#f4f7f4;text-align:right;"><strong>${escapeHtml(kg(totals.get(category)))}</strong></td></tr>`
+          + materials.map(item => `<tr><td></td><td>${escapeHtml(item.material_display_name)}</td><td style="text-align:right;">${escapeHtml(kg(item.quantity_kg))}</td></tr>`).join('')
+        ).join('');
+        return `<div class="card mb-3"><h3>Waste inventory</h3>${summary}<div class="table-responsive"><table class="table"><thead><tr><th style="width:24px;"></th><th>Category / Material</th><th style="text-align:right;">Quantity</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+      }
+
+      function evidenceHtml(items) {
+        if (!items.length) return '<div class="card mb-3"><h3>Supporting evidence</h3><p class="text-muted">No evidence uploaded</p></div>';
+        const latestRevision = Math.max(...items.map(item => Number(item.revision_number) || 0));
+        const rows = items.map(item => `<tr><td>${escapeHtml(item.metric_code || item.evidence_category || 'General')}</td><td><strong>${escapeHtml(item.original_filename)}</strong><br><span class="text-muted">${escapeHtml(item.mime_type)} • ${(item.file_size_bytes / 1024).toFixed(1)} KB</span></td><td>Revision ${escapeHtml(item.revision_number)}</td><td>${Number(item.revision_number) === latestRevision ? '<span class="badge badge-approved">Current revision</span>' : '<span class="badge badge-draft">Previous submitted revision</span>'}</td><td><a class="btn btn-outline" target="_blank" rel="noopener" href="${escapeHtml(KCosmosEvidence.contentUrl('admin', null, item.id))}">View</a> <a class="btn btn-outline" href="${escapeHtml(KCosmosEvidence.contentUrl('admin', null, item.id, true))}">Download</a></td></tr>`).join('');
+        return `<div class="card mb-3"><h3>Supporting evidence</h3><div class="table-responsive"><table class="table"><thead><tr><th>Metric / category</th><th>File</th><th>Revision</th><th>Status</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+      }
+
+      async function loadQueue() {
+        try {
+          const periodId = document.getElementById('queue-period').value;
+          if (!periodId) return;
+          const groups = await Promise.all(domains.map(async domain => (await KCosmos.api(`/api/admin/review-queue?domain=${domain}&reporting_period_id=${encodeURIComponent(periodId)}`)).map(item => ({...item, domain}))));
+          const queue = groups.flat();
+          const body = document.getElementById('queue-body');
+          body.innerHTML = queue.length ? queue.map(item => `<tr><td><strong>${escapeHtml(item.domain)}</strong></td><td>${escapeHtml(item.id)}</td><td>${escapeHtml(item.reporting_period_label)}</td><td>${escapeHtml(item.manager_display_name || '—')}</td><td>${item.submitted_at ? escapeHtml(new Date(item.submitted_at).toLocaleString()) : '—'}</td><td><span class="badge badge-review">${escapeHtml(item.status.replaceAll('_',' '))}</span></td><td><button class="btn btn-outline review-item" data-id="${escapeHtml(item.id)}">Review</button></td></tr>`).join('') : '<tr><td colspan="7" class="text-center text-muted">No submissions awaiting review.</td></tr>';
+          document.querySelectorAll('.review-item').forEach(button => button.addEventListener('click', () => openSubmission(button.dataset.id)));
+          const requested = new URLSearchParams(window.location.search).get('submission');
+          if (requested && queue.some(item => item.id === requested)) openSubmission(requested);
+        } catch (error) { showToast(error.message, 'error'); }
+      }
+
+      async function openSubmission(id) {
+        try {
+          const [submission, evidence] = await Promise.all([
+            KCosmos.api(`/api/admin/submissions/${encodeURIComponent(id)}`),
+            KCosmosEvidence.listAdmin(id)
+          ]);
+          currentSubmission = submission;
+          document.getElementById('modal-sub-id').textContent = currentSubmission.id;
+          const detail = Array.isArray(currentSubmission.programmes)
+            ? currentSubmission.programmes.map(programmeHtml).join('')
+            : metricsHtml(currentSubmission.values || []);
+          document.getElementById('modal-data-container').innerHTML = `<p><strong>Domain:</strong> ${escapeHtml(currentSubmission.domain)} &nbsp; <strong>Period:</strong> ${escapeHtml(currentSubmission.reporting_period_label)} &nbsp; <strong>Revision:</strong> ${escapeHtml(currentSubmission.revision_number)} &nbsp; <strong>Status:</strong> ${escapeHtml(currentSubmission.status)}</p>${detail}${wasteHtml(currentSubmission.waste)}${energyHtml(currentSubmission.energy)}${calculationsHtml(currentSubmission.calculations || [])}`;
+          document.getElementById('modal-evidence-container').innerHTML = evidenceHtml(evidence);
+          document.getElementById('admin-comment').value = '';
+          modal.classList.add('active');
+        } catch (error) { showToast(error.message, 'error'); }
+      }
+
+      async function action(suffix, body) {
+        if (!currentSubmission) return;
+        try {
+          await KCosmos.api(`/api/admin/submissions/${currentSubmission.id}/${suffix}`, {method:'POST', body:body ? JSON.stringify(body) : undefined});
+          modal.classList.remove('active'); showToast('Admin action recorded.', 'success'); await loadQueue(); await loadPeriods();
+        } catch (error) { showToast(error.message, 'error'); }
+      }
+
+      let releasePeriodsById = new Map();
+
+      // A suggested version only, built from the server's own period fields
+      // (never hardcoded). The admin can freely overwrite it; this exists so
+      // the "Release version" field is never left silently empty behind a
+      // placeholder that looks like a real value - that emptiness is exactly
+      // what the backend's 1-character minimum rejects with a 422.
+      function suggestedReleaseVersion(period) {
+        if (!period) return '';
+        return `sustainability-${period.year}-${String(period.month).padStart(2, '0')}-v1`;
+      }
+
+      function applyReleaseVersionSuggestion(period) {
+        const input = document.getElementById('release-version');
+        const suggestion = suggestedReleaseVersion(period);
+        // Only overwrite when the field is empty or still holds our own
+        // previous suggestion - never clobber something the admin typed.
+        if (!input.value.trim() || input.dataset.autoSuggested === input.value) {
+          input.value = suggestion;
+          input.dataset.autoSuggested = suggestion;
+        }
+      }
+
+      async function loadPeriods() {
+        const periods = await KCosmos.api('/api/admin/periods');
+        releasePeriodsById = new Map(periods.map(item => [item.id, item]));
+        const options = periods.map(item => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.label || `${item.year}-${String(item.month).padStart(2,'0')}`)}</option>`).join('');
+        const queuePeriod = document.getElementById('queue-period');
+        const releasePeriod = document.getElementById('release-period');
+        queuePeriod.innerHTML = options;
+        releasePeriod.innerHTML = options;
+        const parameters = new URLSearchParams(window.location.search);
+        const requestedPeriod = parameters.get('period');
+        const institutionalParts = Object.fromEntries(new Intl.DateTimeFormat('en', {timeZone:'Asia/Kolkata', year:'numeric', month:'numeric'}).formatToParts(new Date()).filter(part => part.type === 'year' || part.type === 'month').map(part => [part.type, Number(part.value)]));
+        const currentPeriod = periods.find(item => item.year === institutionalParts.year && item.month === institutionalParts.month);
+        const selectedPeriod = periods.find(item => item.id === requestedPeriod) || currentPeriod || periods[0];
+        if (selectedPeriod) {
+          queuePeriod.value = selectedPeriod.id;
+          releasePeriod.value = selectedPeriod.id;
+          applyReleaseVersionSuggestion(selectedPeriod);
+        }
+        await loadQueue();
+        await loadPublicationState();
+      }
+
+      async function loadReadiness() {
+        const periodId = document.getElementById('release-period').value;
+        const prepareButton = document.getElementById('prepare-release');
+        prepareButton.disabled = true;
+        if (!periodId) return;
+        try {
+          currentReadiness = await KCosmos.api(`/api/admin/reporting-periods/${encodeURIComponent(periodId)}/publication-readiness`);
+          document.getElementById('readiness-period').textContent = currentReadiness.reporting_period.label;
+          document.getElementById('readiness-count').textContent = `${currentReadiness.approved_domains} / ${currentReadiness.required_domains} Approved`;
+          const state = document.getElementById('readiness-state');
+          state.textContent = currentReadiness.ready_to_publish ? 'READY' : 'NOT READY';
+          state.className = `badge ${currentReadiness.ready_to_publish ? 'badge-approved' : 'badge-correction'}`;
+          domains.forEach(domain => {
+            const item = currentReadiness.domains[domain];
+            document.getElementById(`readiness-${domain}`).textContent = (item?.status || 'missing').replaceAll('_', ' ');
+            document.getElementById(`readiness-${domain}-revision`).textContent = item?.revision_number ? `Revision ${item.revision_number}` : '—';
+          });
+          document.getElementById('readiness-blockers').textContent = currentReadiness.ready_to_publish
+            ? `All ${currentReadiness.required_domains} required domains are approved. Preparation is available.`
+            : `Blockers: ${currentReadiness.blockers.map(item => `${item.domain} — ${item.status.replaceAll('_', ' ')}`).join('; ')}`;
+        } catch (error) {
+          currentReadiness = null;
+          document.getElementById('readiness-state').textContent = 'UNAVAILABLE';
+          document.getElementById('readiness-blockers').textContent = error.message;
+          showToast(error.message, 'error');
+        }
+        applyPrepareAvailability();
+      }
+
+      // Prepare is offered only when the period is ready, no candidate is
+      // already waiting for review, and the typed version is not already taken.
+      function applyPrepareAvailability() {
+        const version = document.getElementById('release-version').value.trim();
+        const versionTaken = periodReleases.some(item => item.version === version);
+        const candidateWaiting = periodReleases.some(item => item.status === 'candidate');
+        document.getElementById('prepare-release').disabled =
+          !releasesKnown || !currentReadiness?.ready_to_publish || candidateWaiting || versionTaken;
+      }
+
+      function renderReleaseState() {
+        const badge = document.getElementById('release-state-badge');
+        const versionNode = document.getElementById('release-state-version');
+        const message = document.getElementById('release-state-message');
+        const openButton = document.getElementById('open-release');
+        const preview = document.getElementById('release-preview');
+        // A waiting candidate takes precedence over the live release: it is
+        // the one that still needs a review and an explicit publish decision.
+        const candidate = periodReleases.find(item => item.status === 'candidate');
+        const active = periodReleases.find(item => item.status === 'active');
+        preparedRelease = candidate || active || null;
+        openButton.disabled = !preparedRelease;
+        if (!preparedRelease) {
+          versionNode.textContent = '—';
+          badge.textContent = 'NONE';
+          badge.className = 'badge badge-draft';
+          message.textContent = 'No release has been prepared for this period.';
+          preview.textContent = '';
+        } else {
+          const isCandidate = preparedRelease.status === 'candidate';
+          versionNode.textContent = preparedRelease.version;
+          badge.textContent = isCandidate ? 'CANDIDATE' : 'ACTIVE / PUBLISHED';
+          badge.className = `badge ${isCandidate ? 'badge-review' : 'badge-approved'}`;
+          message.textContent = isCandidate
+            ? `Candidate prepared ${new Date(preparedRelease.created_at).toLocaleString()}. Open the release preview to review it, then publish explicitly.`
+            : `Published ${new Date(preparedRelease.published_at).toLocaleString()}. This version is live on the public dashboard.`;
+          preview.textContent = JSON.stringify({
+            id: preparedRelease.id,
+            version: preparedRelease.version,
+            status: preparedRelease.status,
+            checksum_sha256: preparedRelease.checksum_sha256,
+          }, null, 2);
+        }
+        applyPrepareAvailability();
+      }
+
+      // Rediscovers releases for the selected period from the database, so a
+      // prepared candidate survives reloads and back-navigation.
+      async function loadReleases() {
+        const periodId = document.getElementById('release-period').value;
+        periodReleases = [];
+        releasesKnown = false;
+        preparedRelease = null;
+        document.getElementById('open-release').disabled = true;
+        if (!periodId) return renderReleaseState();
+        try {
+          const releases = await KCosmos.api(`/api/admin/releases?reporting_period_id=${encodeURIComponent(periodId)}`);
+          // Ignore a response that arrives after the admin switched periods.
+          if (document.getElementById('release-period').value !== periodId) return;
+          periodReleases = Array.isArray(releases) ? releases : [];
+          releasesKnown = true;
+          renderReleaseState();
+        } catch (error) {
+          renderReleaseState();
+          document.getElementById('release-state-badge').textContent = 'UNAVAILABLE';
+          document.getElementById('release-state-message').textContent = `Existing releases could not be checked: ${error.message}`;
+          document.getElementById('prepare-release').disabled = true;
+        }
+      }
+
+      async function loadPublicationState() {
+        periodReleases = [];
+        releasesKnown = false;
+        await loadReadiness();
+        await loadReleases();
+      }
+
+      document.getElementById('close-modal').addEventListener('click', () => modal.classList.remove('active'));
+      document.getElementById('btn-under-review').addEventListener('click', () => action('begin-review'));
+      document.getElementById('btn-approve').addEventListener('click', () => action('approve'));
+      document.getElementById('btn-correction').addEventListener('click', () => { const reason=document.getElementById('admin-comment').value.trim(); if(!reason) return showToast('A correction reason is required.','error'); action('request-correction',{reason}); });
+      document.getElementById('refresh-queue').addEventListener('click', loadQueue);
+      document.getElementById('queue-period').addEventListener('change', async event => {
+        const parameters = new URLSearchParams(window.location.search);
+        parameters.set('period', event.target.value);
+        parameters.delete('submission');
+        history.replaceState(null, '', `${window.location.pathname}?${parameters.toString()}`);
+        await loadQueue();
+      });
+      document.getElementById('release-period').addEventListener('change', event => {
+        applyReleaseVersionSuggestion(releasePeriodsById.get(event.target.value));
+        loadPublicationState();
+      });
+
+      const VERSION_PATTERN = /^[A-Za-z0-9._-]+$/;
+
+      function showReleaseError(message) {
+        const node = document.getElementById('release-error');
+        node.textContent = message;
+        node.style.display = message ? '' : 'none';
+      }
+
+      // Renders a persistent, specific message for every case the backend can
+      // return, instead of a single transient "Prepare failed" toast.
+      function renderPrepareFailure(error) {
+        const status = error?.status || 0;
+        let message;
+        if (status === 422) {
+          message = `Release version is invalid. ${error.message || 'Check the value and try again.'}`;
+        } else if (status === 409 && error?.code === 'publication_not_ready') {
+          // error.message already includes "Blocking: domain (status), ..."
+          // from apiRequest's structured-detail enrichment (auth-client.js).
+          message = `This period is no longer ready to publish. ${error.message || ''} Refresh and try again.`;
+        } else if (status === 409) {
+          message = error.message || 'A release with this version already exists. Choose a different version.';
+        } else if (status === 401) {
+          message = 'Your session has expired. Please sign in again.';
+        } else if (status === 403) {
+          message = error.message || 'You are not authorized to prepare a release.';
+        } else if (status >= 500) {
+          message = 'The server could not complete the request.';
+        } else {
+          message = error?.message || 'Prepare failed.';
+        }
+        // Diagnostic HTTP request id for support/log correlation only. It is
+        // NOT a release id and must never be used to open a preview.
+        const reference = error?.requestId ? ` Request reference: ${error.requestId}` : '';
+        showReleaseError(`${message}${reference}`);
+        showToast(message, 'error');
+        console.error('[K-COSMOS] Release prepare failed.', {
+          status, code: error?.code ?? null, requestId: error?.requestId ?? null
+        });
+      }
+
+      document.getElementById('prepare-release').addEventListener('click', async () => {
+        showReleaseError('');
+        if (!currentReadiness?.ready_to_publish) {
+          return showReleaseError(`All ${currentReadiness?.required_domains ?? 'required'} domains must be approved before preparation.`);
+        }
+        const reportingPeriodId = document.getElementById('release-period').value;
+        const version = document.getElementById('release-version').value.trim();
+        // Mirror the backend's exact contract client-side, so an invalid or
+        // empty version is caught before a network round trip - this is the
+        // condition that previously reached the server as a bare 422.
+        if (!reportingPeriodId) return showReleaseError('Select a reporting period first.');
+        if (!version) return showReleaseError('Release version is required.');
+        if (version.length > 100) return showReleaseError('Release version must be 100 characters or fewer.');
+        if (!VERSION_PATTERN.test(version)) {
+          return showReleaseError('Release version may only contain letters, digits, dots, underscores and hyphens (no spaces or colons).');
+        }
+        document.getElementById('prepare-release').disabled = true;
+        try {
+          await KCosmos.api('/api/admin/releases/prepare', {method:'POST', body:JSON.stringify({reporting_period_id: reportingPeriodId, version})});
+          // Re-read from the database rather than trusting the response alone,
+          // so the page shows exactly what a reload would show.
+          await loadReleases();
+          showToast('Release candidate prepared.', 'success');
+        } catch (error) {
+          if (error?.status === 409 && error?.code !== 'publication_not_ready') {
+            // The version already exists. If it belongs to this period, that is
+            // not a dead end: rediscover it and offer its preview.
+            await loadReleases();
+            const existing = periodReleases.find(item => item.version === version);
+            if (existing) {
+              const note = existing.status === 'candidate' ? 'Candidate already prepared.' : 'This version is already published.';
+              document.getElementById('release-state-message').textContent = `${note} ${document.getElementById('release-state-message').textContent}`;
+              showToast(note, 'info');
+              return;
+            }
+          }
+          renderPrepareFailure(error);
+          applyPrepareAvailability();
+        }
+      });
+      document.getElementById('release-version').addEventListener('input', applyPrepareAvailability);
+      // Only ever navigates with a release id returned by the releases API -
+      // never a request/reference id from an error response.
+      document.getElementById('open-release').addEventListener('click', () => { if(preparedRelease?.id) window.location.href=`admin-preview.html?release_id=${encodeURIComponent(preparedRelease.id)}`; });
+      await loadPeriods();
+    });
+  </script>
+</body>
+</html>
