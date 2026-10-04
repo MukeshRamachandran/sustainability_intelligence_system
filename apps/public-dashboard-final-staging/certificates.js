@@ -6,8 +6,9 @@
 
    Everything shown - the years, the document list, every title, date,
    quantity and number - comes from the public certificate API. This file
-   holds only the API routes and the rendering rules, so a new certificate
-   or a new year appears without any change here.
+   holds the API routes, the rendering rules, and local card images for two
+   published scans. A new certificate or a new year still appears without
+   any change here; only those two received dates use a local preview.
 
    Certificates are supporting documents. A certificate quantity is
    document metadata; it is not read by any KPI card or chart.
@@ -33,6 +34,14 @@
   const loadYears = domain => getJson(`${YEARS_ROUTE}?domain=${encodeURIComponent(domain)}`);
   const loadCertificates = (domain, year) => getJson(`${LIST_ROUTE}?domain=${encodeURIComponent(domain)}&year=${encodeURIComponent(year)}`);
   const fileUrl = (id, download) => apiBase() + fileRoute(id) + (download ? '?download=1' : '');
+  /* Local scans for two received dates. Titles, dates, quantities and every
+     other field still come from the certificate API. Any other certificate
+     keeps the public file route. */
+  const CARD_IMAGE_BY_RECEIVED_DATE = Object.freeze({
+    '2025-11-28': '/assets/28_11_2026.jpeg',
+    '2025-11-29': '/assets/29_11_2026.jpeg'
+  });
+  const localCardImage = item => CARD_IMAGE_BY_RECEIVED_DATE[item && item.received_date] || '';
 
   /* ---- presentation helpers (formatting only) ---- */
   function el(tag, className, text) {
@@ -168,11 +177,12 @@
     const side = document.getElementById('certViewerSide');
     document.getElementById('certViewerTitle').textContent = item.title;
     stage.replaceChildren();
-    if (isImage(item)) {
+    const preview = localCardImage(item);
+    if (preview || isImage(item)) {
       const image = el('img', 'cert-viewer-image');
       image.alt = item.title;
       image.addEventListener('load', fitRotation);
-      image.src = fileUrl(item.id);
+      image.src = preview || fileUrl(item.id);
       stage.append(image);
     } else {
       const frame = el('iframe', 'cert-viewer-frame');
@@ -200,7 +210,7 @@
     );
     document.getElementById('certViewerOpen').href = fileUrl(item.id);
     document.getElementById('certViewerDownload').href = fileUrl(item.id, true);
-    document.getElementById('certViewerRotate').hidden = !isImage(item);
+    document.getElementById('certViewerRotate').hidden = !(preview || isImage(item));
     document.getElementById('certViewerPrev').disabled = index === 0;
     document.getElementById('certViewerNext').disabled = index === viewer.items.length - 1;
     const single = viewer.items.length < 2;
@@ -301,9 +311,12 @@
       items.forEach((item, index) => {
         const card = el('article', 'cert-card');
         const thumb = el('div', 'cert-thumb');
-        if (isImage(item)) {
+        const preview = localCardImage(item);
+        if (preview || isImage(item)) {
           const image = el('img');
-          image.loading = 'lazy'; image.alt = ''; image.src = fileUrl(item.id);
+          image.loading = 'lazy';
+          image.alt = item.title;
+          image.src = preview || fileUrl(item.id);
           thumb.append(image);
         } else {
           thumb.append(el('span', 'cert-thumb-doc', 'PDF'));

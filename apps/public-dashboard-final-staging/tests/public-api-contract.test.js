@@ -2882,8 +2882,9 @@ test('certificate years and cards come from the API; a new year appears with no 
     assert.ok(text.includes(piece), piece);
   }
   assert.match(text, /1,234\.5 kg/);
-  // An image gets a thumbnail from the public file route; a PDF gets a document tile.
+  // An image with no local scan gets a thumbnail from the public file route; a PDF gets a document tile.
   assert.equal(cards[0].all(node => node.tagName === 'IMG')[0].src, '/api/public/certificates/11111111-1111-4111-8111-111111111111/file');
+  assert.equal(cards[0].all(node => node.tagName === 'IMG')[0].alt, 'Fixture certificate A');
   assert.equal(cards[1].byClass('cert-thumb-doc')[0].textContent, 'PDF');
 
   // The backend publishes a certificate for another year: it simply appears.
@@ -2953,17 +2954,50 @@ test('the certificate viewer opens, navigates, rotates and closes from the keybo
   assert.match(css, /@media \(max-width: 860px\) \{[\s\S]*?\.cert-viewer-image \{ width: 100%; height: auto; \}/);
 });
 
+test('the two published scans preview a local image and still open from the public file route', async () => {
+  const scan = (id, received) => ({ ...CERT_A, id, title: `Scan ${received}`, received_date: received, mime_type: 'image/jpeg' });
+  const other = { ...CERT_A, id: '33333333-3333-4333-8333-333333333333', title: 'Other year scan', received_date: '2032-04-02' };
+  const api = {
+    years: [{ year: 2025, certificate_count: 2, certificate_types: [] }, { year: 2032, certificate_count: 1, certificate_types: [] }],
+    certificates: {
+      2025: [scan('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', '2025-11-28'), scan('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', '2025-11-29')],
+      2032: [other]
+    }
+  };
+  const view = await certHarness(api, '#waste-certificates/2025');
+  await view.navigate('#waste-certificates/2025');
+  const images = view.host.byClass('cert-card').map(card => card.all(node => node.tagName === 'IMG')[0]);
+  assert.deepEqual(images.map(image => image.src), ['/assets/28_11_2026.jpeg', '/assets/29_11_2026.jpeg']);
+  assert.deepEqual(images.map(image => image.alt), ['Scan 2025-11-28', 'Scan 2025-11-29']);
+  view.host.byClass('cert-card')[0].byClass('cert-btn')[0].click();
+  assert.equal(view.byId.certViewer.hidden, false);
+  assert.equal(view.byId.certViewerStage.children[0].src, '/assets/28_11_2026.jpeg');
+  assert.equal(view.byId.certViewerStage.children[0].alt, 'Scan 2025-11-28');
+  assert.equal(view.byId.certViewerOpen.href, '/api/public/certificates/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/file');
+  await view.navigate('#waste-certificates/2032');
+  const later = view.host.byClass('cert-card')[0].all(node => node.tagName === 'IMG')[0];
+  assert.equal(later.src, '/api/public/certificates/33333333-3333-4333-8333-333333333333/file');
+  assert.equal(later.alt, 'Other year scan');
+});
+
 test('no certificate content is written into the dashboard code', () => {
   for (const file of ['certificates.js', 'app.js', 'index.html', 'public-data-loader.js', 'public-api.js']) {
     const source = read(file);
     assert.doesNotMatch(source, /e-waste|Green India|\b1640\b|\b1390\b|2041-|20411|GIR\/|KCT\/|1718109|20HFZ/i, file);
-    assert.doesNotMatch(source, /\.jpe?g['"]/i, file);  // no certificate file name
+    if (file !== 'certificates.js') assert.doesNotMatch(source, /\.jpe?g['"]/i, file);
   }
   const source = read('certificates.js');
-  assert.doesNotMatch(source, /\b20[2-9]\d\b/);  // no reporting year anywhere in the certificate code
+  assert.match(source, /'2025-11-28': '\/assets\/28_11_2026\.jpeg'/);
+  assert.match(source, /'2025-11-29': '\/assets\/29_11_2026\.jpeg'/);
+  const withoutLocalScans = source.replace(/const CARD_IMAGE_BY_RECEIVED_DATE = Object\.freeze\(\{[\s\S]*?\}\);/, '');
+  assert.doesNotMatch(withoutLocalScans, /\b20[2-9]\d\b/);  // no reporting year outside the local scan map
+  assert.doesNotMatch(withoutLocalScans, /\.jpe?g['"]/i);
   assert.doesNotMatch(source, /years\s*=\s*\[\s*\d/);
   assert.match(source, /const YEARS_ROUTE = '\/api\/public\/certificates\/years';/);
   assert.match(source, /domain: 'waste', pageId: 'waste'/);
+  assert.match(read('styles.css'), /\.cert-thumb \{[^}]*height: 200px/);
+  assert.match(read('styles.css'), /\.cert-thumb img \{ width: 100%; height: 100%; object-fit: contain; object-position: center; \}/);
+  assert.doesNotMatch(read('mobile.css'), /\.cert-thumb/);
 });
 
 /* ---- Responsive layout contract (structure, not pixels) ---- */
