@@ -46,6 +46,13 @@
     // Night at the campus (see isNightAtKCT): one clip, registered like rain.
     night: { intro: 'media/night1.mp4', loop: 'media/night1.mp4' }
   };
+  /* Clips whose loop point is hidden by a dissolve instead of the browser's
+     own hard-cut loop: mode -> dissolve length in seconds. The two <video>
+     elements take turns - shortly before the playing one ends, the other
+     starts the same clip from the top and fades in over it - so the clip
+     never visibly restarts. See armHandoff(). */
+  const SEAMLESS_LOOP = { night: 2 };
+  const HANDOFF_FADE = 0.6; // seconds - the ordinary intro -> loop crossfade
   const NIGHT_CHECK_MS = 60000; // how often an open Weather page re-checks day/night
   const NIGHT_START_MIN = 19 * 60;    // 19:00 IST, inclusive
   const NIGHT_END_MIN = 4 * 60 + 30;  // 04:30 IST, exclusive
@@ -80,13 +87,53 @@
   }
 
   let bgCondition = null;   // condition the video layer is currently showing, or null if hidden
-  let bgSwapHandlers = null; // {ended, timeupdate} listeners on the intro clip, so a re-trigger can clean up an in-flight one
+  let bgSwap = null;        // {video, handoff, nearEnd} listeners armed on the playing clip, so a re-trigger can clean up an in-flight one
+  let bgFadeTimer = null;   // hides the outgoing clip once the incoming one has fully faded in
+
+  function clearBgSwap() {
+    if (bgSwap) {
+      bgSwap.video.removeEventListener('ended', bgSwap.handoff);
+      bgSwap.video.removeEventListener('timeupdate', bgSwap.nearEnd);
+      bgSwap = null;
+    }
+    clearTimeout(bgFadeTimer);
+    bgFadeTimer = null;
+  }
+
+  /* Hands the picture from `from` to `to`: shortly before `from` ends, `to`
+     starts from the top and fades in ON TOP of it. `from` stays fully opaque
+     underneath until that fade is done, so the page background never shows
+     through mid-dissolve. For a SEAMLESS_LOOP clip the two then swap roles
+     and the same handoff is armed again, for as long as the page is open. */
+  function armHandoff(from, to, condition, fade) {
+    const seamless = !!SEAMLESS_LOOP[condition];
+    const handoff = () => {
+      clearBgSwap();
+      to.currentTime = 0;
+      to.play().catch(() => {});
+      from.classList.remove('video-front');
+      to.classList.add('video-front', 'video-visible');
+      bgFadeTimer = setTimeout(() => { from.classList.remove('video-visible'); }, fade * 1000);
+      if (seamless) armHandoff(to, from, condition, fade);
+    };
+    const nearEnd = () => {
+      if (!from.duration) return;
+      // timeupdate only fires about 4x a second, so a dissolve starts a little
+      // early; never more than a third of the clip, so a short clip can't thrash.
+      const lead = seamless ? Math.min(fade + 0.3, from.duration / 3) : 0.5;
+      if (from.currentTime >= from.duration - lead) handoff();
+    };
+    from.addEventListener('ended', handoff);
+    from.addEventListener('timeupdate', nearEnd);
+    bgSwap = { video: from, handoff, nearEnd };
+  }
 
   /* Starts (or restarts, from the top) the intro->loop video for `condition`.
      The intro (sunny1) plays once; ~0.5s before it ends, the loop clip
-     (sunny2) is already primed and starts playing underneath, then the two
-     cross-fade via the .video-visible opacity transition in CSS - so the
-     handoff reads as one continuous clip rather than a hard cut. */
+     (sunny2) is already primed and starts playing over it, fading in via the
+     .video-visible opacity transition in CSS - so the handoff reads as one
+     continuous clip rather than a hard cut. A SEAMLESS_LOOP clip (night)
+     keeps doing that at every loop point instead of looping natively. */
   function playConditionVideo(condition, opts) {
     // Respect prefers-reduced-motion like the rest of the site's animations -
     // fall back to the static page background instead of an ambient video.
@@ -100,41 +147,26 @@
     const restart = !opts || opts.restart !== false;
     if (bgCondition === condition && !restart) { wrap.classList.add('active'); return; }
 
-    if (bgSwapHandlers) {
-      vIntro.removeEventListener('ended', bgSwapHandlers.handoff);
-      vIntro.removeEventListener('timeupdate', bgSwapHandlers.nearEnd);
-      bgSwapHandlers = null;
-    }
+    clearBgSwap();
 
     bgCondition = condition;
     wrap.classList.add('active');
+    const fade = SEAMLESS_LOOP[condition] || HANDOFF_FADE;
+    wrap.style.setProperty('--wx-fade', fade + 's');
 
-    vLoop.loop = true;
-    vLoop.classList.remove('video-visible');
+    vLoop.loop = !SEAMLESS_LOOP[condition];
+    vLoop.classList.remove('video-visible', 'video-front');
     vLoop.src = cfg.loop;
     vLoop.load();
 
     vIntro.loop = false;
+    vIntro.classList.remove('video-front');
     vIntro.classList.add('video-visible');
     vIntro.src = cfg.intro;
     vIntro.currentTime = 0;
     vIntro.play().catch(() => {});
 
-    const handoff = () => {
-      vLoop.currentTime = 0;
-      vLoop.play().catch(() => {});
-      vLoop.classList.add('video-visible');
-      vIntro.classList.remove('video-visible');
-      vIntro.removeEventListener('ended', handoff);
-      vIntro.removeEventListener('timeupdate', nearEnd);
-      bgSwapHandlers = null;
-    };
-    const nearEnd = () => {
-      if (vIntro.duration && vIntro.currentTime >= vIntro.duration - 0.5) handoff();
-    };
-    vIntro.addEventListener('ended', handoff);
-    vIntro.addEventListener('timeupdate', nearEnd);
-    bgSwapHandlers = { handoff, nearEnd };
+    armHandoff(vIntro, vLoop, condition, fade);
   }
 
   function hideConditionVideo() {
@@ -147,6 +179,7 @@
     const vLoop = document.getElementById('weatherBgVideoB');
     if (vIntro) vIntro.pause();
     if (vLoop) vLoop.pause();
+    clearBgSwap();
     bgCondition = null;
   }
 

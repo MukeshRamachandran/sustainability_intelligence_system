@@ -2110,11 +2110,17 @@ function syncMonthOptions(preferred) {
   monthFilter.value = options.some(option => option.value === keep) ? keep : (options[0]?.value || 'all');
   monthFilter.dataset.year = yearFilter.value;
 }
+/* The dashboard opens on this period every time (owner's choice), instead of
+   the backend's default_key - as long as the timeline offers it. If it ever
+   does not, the backend default applies as before. */
+const OPENING_PERIOD_KEY = '2025-FY';
 function populatePeriodControls(defaultKey) {
   if (!periodSelector.length) return;
+  const offered = key => periodSelector.some(item => item.options.some(option => option.key === key));
+  if (offered(OPENING_PERIOD_KEY)) defaultKey = OPENING_PERIOD_KEY;
   // ?period=2025-FY / 2025-03 deep-links a period, but only one the timeline offers.
   const requested = new URLSearchParams(window.location.search).get('period');
-  if (requested && periodSelector.some(item => item.options.some(option => option.key === requested))) {
+  if (requested && offered(requested)) {
     defaultKey = requested;
   }
   yearFilter.innerHTML = '';

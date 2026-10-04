@@ -1108,13 +1108,19 @@ body.sidebar-active .page {
   height: 100%;
   object-fit: cover;
   opacity: 0;
-  transition: opacity .6s ease;
+  /* --wx-fade is set by weather.js per clip: the short intro -> loop
+     crossfade by default, a longer dissolve for a seamlessly looped clip. */
+  transition: opacity var(--wx-fade, .6s) ease;
   filter: brightness(1.22) saturate(1.1) contrast(1.03);
 }
 .weather-bg-video.video-visible { opacity: 1; }
+/* The incoming clip fades in above the outgoing one (which stays opaque
+   until the fade is done), so the page background never shows mid-dissolve. */
+.weather-bg-video.video-front { z-index: 1; }
 .weather-bg-scrim {
   position: absolute;
   inset: 0;
+  z-index: 2;
   background: linear-gradient(180deg, rgba(15,23,20,.15) 0%, rgba(15,23,20,.22) 60%, rgba(15,23,20,.3) 100%);
 }
 
