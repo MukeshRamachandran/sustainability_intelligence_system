@@ -1262,7 +1262,7 @@ body[data-page="overview"] #exportBtn { margin-left: auto; }
   .elec-mix-title-box { position: relative; top: 0; left: 0; margin-bottom: 16px; margin-top: 0; }
 }
 /* Fuel widget: both classes sit on the same element, so the selectors are compound. */
-.elec-mix-widget.fuel-mix-widget { display: block; min-height: 320px; padding: 24px; }
+.elec-mix-widget.fuel-mix-widget { display: block; min-height: 320px; height: 100%; padding: 24px; } /* height: fills its grid cell, so the card matches the Electricity Mix card beside it */
 .fuel-mix-widget .elec-mix-title-box { position: static; margin: 0 0 20px; }
 .fuel-mix-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(180px, 240px) minmax(0, 1fr); gap: 16px; align-items: center; }
 .fuel-mix-layout .elec-mix-chart-container { width: 100%; max-width: 240px; height: 220px; margin: auto; }

@@ -3015,7 +3015,7 @@ test('the Weather background video stays out of the layout and keeps its aspect 
   const weather = read('weather.js');
   assert.match(weather, /NIGHT_START_MIN = 19 \* 60/);
   assert.match(weather, /NIGHT_END_MIN = 4 \* 60 \+ 30/);
-  assert.match(weather, /night: \{ intro: 'media\/night\.mp4', loop: 'media\/night\.mp4' \}/);
+  assert.match(weather, /night: \{ intro: 'media\/night1\.mp4', loop: 'media\/night1\.mp4' \}/);
 });
 
 test('the certificate viewer fits the screen and keeps a turned image inside its stage', () => {

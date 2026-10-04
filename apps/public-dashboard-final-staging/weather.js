@@ -44,7 +44,7 @@
     sunny: { intro: 'media/sunny1.mp4', loop: 'media/sunny2.mp4' },
     rainy: { intro: 'media/rain.mp4', loop: 'media/rain.mp4' },
     // Night at the campus (see isNightAtKCT): one clip, registered like rain.
-    night: { intro: 'media/night.mp4', loop: 'media/night.mp4' }
+    night: { intro: 'media/night1.mp4', loop: 'media/night1.mp4' }
   };
   const NIGHT_CHECK_MS = 60000; // how often an open Weather page re-checks day/night
   const NIGHT_START_MIN = 19 * 60;    // 19:00 IST, inclusive
