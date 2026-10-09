@@ -18,6 +18,7 @@ class ReadyResponse(BaseModel):
     status: str
     database: str
     evidence: str
+    certificates: str
 
 
 def evidence_is_ready(path: Path) -> bool:
@@ -38,11 +39,13 @@ def ready(request: Request, response: Response) -> ReadyResponse:
     evidence_ready = evidence_is_ready(request.app.state.settings.EVIDENCE_ROOT) and evidence_is_ready(
         evidence_directory(request.app.state.settings)
     )
-    if not database_ready or not evidence_ready:
+    certificates_ready = evidence_is_ready(request.app.state.settings.CERTIFICATE_STORAGE_ROOT)
+    if not database_ready or not evidence_ready or not certificates_ready:
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
         return ReadyResponse(
             status="unavailable",
             database="ready" if database_ready else "unavailable",
             evidence="ready" if evidence_ready else "unavailable",
+            certificates="ready" if certificates_ready else "unavailable",
         )
-    return ReadyResponse(status="ready", database="ready", evidence="ready")
+    return ReadyResponse(status="ready", database="ready", evidence="ready", certificates="ready")

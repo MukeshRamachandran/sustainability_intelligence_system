@@ -41,5 +41,22 @@ def test_production_accepts_replaced_security_values(tmp_path: Path) -> None:
         CSRF_SECRET="c" * 48,
         SESSION_COOKIE_SECURE=True,
         EVIDENCE_ROOT=tmp_path.resolve(),
+        CERTIFICATE_STORAGE_ROOT=(tmp_path / "certificates").resolve(),
     )
     assert settings.APP_ENV == "production"
+    assert settings.CERTIFICATE_STORAGE_ROOT.is_absolute()
+
+
+def test_production_rejects_relative_certificate_storage(tmp_path: Path) -> None:
+    with pytest.raises(ValidationError, match="certificate storage root must be absolute"):
+        Settings(
+            APP_ENV="production",
+            DATABASE_URL="postgresql+psycopg://app:unique-password@db.internal/microcosm",
+            PUBLIC_BASE_URL="https://sustainability.example.edu",
+            ALLOWED_ORIGINS=["https://sustainability.example.edu"],
+            SECRET_KEY="s" * 48,
+            CSRF_SECRET="c" * 48,
+            SESSION_COOKIE_SECURE=True,
+            EVIDENCE_ROOT=tmp_path.resolve(),
+            CERTIFICATE_STORAGE_ROOT=Path(".local/certificates"),
+        )

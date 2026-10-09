@@ -129,6 +129,8 @@ class Settings(BaseSettings):
                 raise ValueError("production evidence root must be absolute")
             if self.EVIDENCE_STORAGE_DIR is not None and not self.EVIDENCE_STORAGE_DIR.is_absolute():
                 raise ValueError("production evidence storage directory must be absolute")
+            if not self.CERTIFICATE_STORAGE_ROOT.is_absolute():
+                raise ValueError("production certificate storage root must be absolute")
         return self
 
 

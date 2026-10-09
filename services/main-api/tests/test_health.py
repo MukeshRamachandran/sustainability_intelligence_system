@@ -8,7 +8,12 @@ def test_ready_succeeds_when_dependencies_are_ready(client: TestClient) -> None:
     with patch("app.routers.health.database_is_ready", return_value=True):
         response = client.get("/health/ready")
     assert response.status_code == 200
-    assert response.json() == {"status": "ready", "database": "ready", "evidence": "ready"}
+    assert response.json() == {
+        "status": "ready",
+        "database": "ready",
+        "evidence": "ready",
+        "certificates": "ready",
+    }
 
 
 def test_ready_fails_safely_when_database_is_unavailable(client: TestClient) -> None:
@@ -19,6 +24,7 @@ def test_ready_fails_safely_when_database_is_unavailable(client: TestClient) -> 
         "status": "unavailable",
         "database": "unavailable",
         "evidence": "ready",
+        "certificates": "ready",
     }
     for forbidden in ("postgresql", "password", "traceback", "exception", "evidence_root"):
         assert forbidden not in response.text.lower()
@@ -30,4 +36,15 @@ def test_ready_fails_safely_when_evidence_root_is_missing(client: TestClient, tm
         response = client.get("/health/ready")
     assert response.status_code == 503
     assert response.json()["evidence"] == "unavailable"
+    assert response.json()["certificates"] == "ready"
+    assert str(tmp_path) not in response.text
+
+
+def test_ready_fails_when_certificate_storage_is_missing(client: TestClient, tmp_path: Path) -> None:
+    client.app.state.settings.CERTIFICATE_STORAGE_ROOT = tmp_path / "missing-certificates"
+    with patch("app.routers.health.database_is_ready", return_value=True):
+        response = client.get("/health/ready")
+    assert response.status_code == 503
+    assert response.json()["certificates"] == "unavailable"
+    assert response.json()["database"] == "ready"
     assert str(tmp_path) not in response.text

@@ -24,6 +24,9 @@ services:
       - .env
     environment:
       APP_ENV: production
+      # Must match the certificate volume below. The application default is a
+      # relative directory, which is not this mount.
+      CERTIFICATE_STORAGE_ROOT: /app/certificate-storage
     ports:
       - "127.0.0.1:8000:8000"
     volumes:
