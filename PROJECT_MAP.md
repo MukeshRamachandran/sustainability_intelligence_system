@@ -32,8 +32,7 @@ Path:
 services/main-api/app/environment
 
 Responsibilities:
-- Playwright session acquisition/refresh (worker only)
-- Aeron readings HTTP polling (worker only, every 5 minutes)
+- Aeron REST API v1 polling with a Bearer API key (worker only, every 5 minutes)
 - sensor normalization and validation
 - environmental persistence (`environment` schema)
 - freshness classification
@@ -48,7 +47,8 @@ services/report-generation
 Path:
 services/main-api/alembic
 
-The Aeron `environment` schema is migration `0012_environment_readings`.
+The Aeron `environment` schema is migration `0012_environment_readings`,
+extended by `0018_aeron_api_v1`.
 
 ## Legacy Supabase reference
 

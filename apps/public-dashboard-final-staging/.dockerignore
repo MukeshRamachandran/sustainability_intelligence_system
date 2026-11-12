@@ -1,0 +1,9 @@
+.agents
+.claude
+tests
+serve-staging.py
+skills-lock.json
+Dockerfile
+.dockerignore
+.git
+*.log

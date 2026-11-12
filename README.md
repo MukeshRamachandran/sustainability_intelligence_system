@@ -32,8 +32,8 @@ It also serves the read-only Aeron environment API
 `services/main-api/app/environment/worker.py`
 
 Separate scheduled process (`python -m app.environment.worker`) that polls
-Aeron every 5 minutes, using Playwright only to obtain or refresh the
-session. See `AERON_INTEGRATION_ARCHITECTURE.md`.
+the Aeron Live3 REST API v1 every 5 minutes with a Bearer API key
+(`AERON_API_KEY`); no browser is involved. See `AERON_INTEGRATION_ARCHITECTURE.md`.
 
 ### Report Generation
 `services/report-generation`

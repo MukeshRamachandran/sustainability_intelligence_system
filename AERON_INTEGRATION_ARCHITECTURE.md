@@ -1,80 +1,107 @@
 # Aeron integration architecture
 
-Environmental readings from the Aeron station reach the existing Weather UI through the K-COSMOS main API. Ingestion is a separate worker, and no visitor request ever contacts Aeron or starts a browser. The source contract is in [AERON_REAL_API_CONTRACT.md](AERON_REAL_API_CONTRACT.md).
+Environmental readings from the Aeron station reach the existing Weather UI through the K-COSMOS main API. Ingestion is a separate worker that calls the Aeron Live3 REST API v1 with a Bearer API key. No browser is involved, and no visitor request ever contacts Aeron. The source contract is in [AERON_REAL_API_CONTRACT.md](AERON_REAL_API_CONTRACT.md).
+
+The previous design logged in with Playwright and headless Chromium to obtain a session cookie. It has been removed: there is no browser login, no `Dockerfile.worker`, and no `playwright` dependency.
 
 ```
-Aeron (live3.aeronsystems.com)
-   ▲  Playwright login only when the session is missing/expired (~hourly at most)
-   │  HTTP GET …/stations/{id}/readings?mode=latest&region=india   (every 5 min)
-Aeron worker  (python -m app.environment.worker, single instance)
+Aeron Live3 REST API v1 (https://live3.aeronsystems.com/api/v1)
+   ▲  GET /timeseries?station={id}   Authorization: Bearer AERON_API_KEY
+   │  (every AERON_POLL_INTERVAL_SECONDS, default 300 s)
+Aeron worker  (python -m app.environment.worker, single instance, same image as the API)
    │  normalize → validate → INSERT … ON CONFLICT (station_id, observed_at) DO NOTHING
 PostgreSQL  environment.readings / environment.ingestion_runs
    │
-Main API  GET /api/environment/latest | /history | /status   (read-only)
+Main API  GET /api/environment/latest | /history | /status | /parameters   (read-only)
    │  same-origin: Nginx (production) / serve-staging.py :3001 (local staging)
-Existing Weather UI  (apps/public-dashboard*/weather.js — layout unchanged)
+Existing Weather UI  (apps/public-dashboard-final-staging/weather.js — unchanged)
 ```
 
 ## Components
 
 | Piece | Location | Responsibility |
 | --- | --- | --- |
-| Parameter map | `services/main-api/app/environment/parameters.py` | 35 source-verified IDs → fields, captions, source units |
-| Normalizer | `…/environment/normalizer.py` | Parses `recordedAt` to an aware UTC datetime (no +330); numeric-only metrics; missing or non-numeric values become `NULL` plus a quality flag; unknown IDs are flagged and kept in `raw_payload`; rejects payloads with no timestamp or no metrics |
-| Freshness | `…/environment/freshness.py` | Single classifier on server time: LIVE `< 10 min`, STALE `10–30 min`, OFFLINE `> 30 min`, missing, or more than 2 min in the future |
-| Source client | `…/environment/source.py` | `AeronReadingsClient` (stdlib HTTPS, fixed error codes), `PlaywrightLogin` (browser always closed), `AeronSession` (in-memory cookie, login backoff) |
-| Repository | `…/environment/repository.py` | Idempotent insert, latest, bounded history, run records |
-| Worker | `…/environment/worker.py` | 5-minute loop, `--once`, PostgreSQL advisory lock, SIGTERM-safe |
-| Worker config | `…/environment/config.py` | `AeronWorkerSettings`: environment only, secrets as `SecretStr`, HTTPS enforced |
-| API | `…/routers/environment.py`, `…/schemas/environment.py` | Public read-only routes |
-| Schema | `alembic/versions/0012_environment_readings.py` | `environment` schema; no FKs into other schemas |
+| Settings | `services/main-api/app/environment/config.py` | `AeronWorkerSettings`. Read from the process environment only (`env_file=None`); Docker Compose injects the values. The key is a `SecretStr`. HTTPS is enforced; the poll interval is clamped to 120–3600 s. |
+| REST client | `…/environment/source.py` | `AeronApiClient`: one pooled `httpx` client, Bearer key, redirects refused so the key never leaves the origin. Retries only timeouts, network errors and 5xx (bounded exponential backoff with jitter). Maps 401/403/404/429 to fixed error codes and parses `Retry-After` / `X-Ratelimit-Reset`. Tracks `X-Ratelimit-Remaining-*`. |
+| Parameter map | `…/environment/parameters.py` | The 35 Aeron parameter IDs bound to the existing `environment.readings` columns, with source units. |
+| Normalizer | `…/environment/normalizer.py` | Version 2. Parses the `/timeseries` payload to an aware UTC `observed_at`, keeps `epoch_ms`, keeps unknown IDs in `unmapped_values`, flags missing or non-numeric values, rejects a payload for another station (`STATION_MISMATCH`) or with no timestamp or metrics. |
+| Freshness | `…/environment/freshness.py` | Server-time classifier: LIVE `< 20 min`, STALE `20–60 min`, OFFLINE beyond that, missing, or more than 2 min in the future. |
+| Repository | `…/environment/repository.py` | Idempotent insert, latest reading, bounded history, run records. |
+| Worker | `…/environment/worker.py` | Single-threaded loop, `--once`, PostgreSQL advisory lock, SIGTERM-safe, `PollScheduler`. |
+| API | `…/routers/environment.py`, `…/schemas/environment.py` | Public read-only routes. |
+| Schema | `alembic/versions/0012_environment_readings.py`, `0018_aeron_api_v1.py` | `environment` schema. `0018` adds three nullable columns only. |
 
 ## Worker cycle
 
-1. Reuse the in-memory session cookie. If there is none, run the Playwright login (dashboard URL → Auth0 form → dashboard), take the cookies for the API origin, and close the browser.
-2. `GET …/readings?mode=latest&region=india`. On 401/403, log in once and retry once. A second rejection fails the cycle rather than looping.
-3. Normalize and validate. Insert only if `(station_id, observed_at)` is new.
-4. Record one `ingestion_runs` row: outcome `INSERTED` / `DUPLICATE` / `FAILED`, fixed `error_code`, `login_performed`.
-5. Sleep for the rest of the 5-minute interval.
+1. On start, the worker exits with code 3 if `AERON_API_KEY` is empty, and with code 2 if another worker holds the advisory lock.
+2. After a restart, the first poll waits until one interval has passed since the last recorded run, so redeploys never add Aeron calls. The worker then logs any drift between Aeron's `/parameters` metadata and the local map (IDs only; never fatal).
+3. `GET /timeseries?station={id}`. Normalize and validate, then insert only if `(station_id, observed_at)` is new. A repeated observation leaves the first stored row unchanged.
+4. Record one `environment.ingestion_runs` row: outcome `INSERTED` / `DUPLICATE` / `FAILED` and a fixed `error_code`. `login_performed` is always `false` now; it stays `true` on historical rows written by the retired browser-login worker.
+5. Choose the next delay:
 
-A failed login pauses further logins for 5 minutes, doubling up to 1 hour, so a bad password cannot lock the account. Logs and run rows contain codes and timestamps only.
+| Last outcome | Next poll |
+| --- | --- |
+| Success, or a transient failure (`TIMEOUT`, `NETWORK_ERROR`, `HTTP_ERROR`, `INVALID_READING`, `DATABASE_ERROR`) | After the normal interval |
+| `RATE_LIMITED` (429) | After `Retry-After` (at least one interval) |
+| `AUTH_FAILED`, `FORBIDDEN`, `NOT_FOUND`, `STATION_MISMATCH` | 5 minutes, doubling to 1 hour, because retrying cannot fix them |
+| Fewer than 500 requests left for the day | At most every 30 minutes |
+
+Logs and run rows contain codes, counts and timestamps only, never the key, request headers or upstream bodies.
 
 ## Storage — `environment.readings`
 
-`id`, `station_id`, `observed_at` (Aeron measurement, UTC), `ingested_at` (K-COSMOS storage, UTC), `source_recorded_at_raw` (verbatim source string), `source` (`aeron-live3`), `source_route`, `normalizer_version`, `quality_flags` (JSONB), `raw_payload` (JSONB: `recordedAt`/`health`/`location`/`data` only), the 35 verified metrics (double precision; the legacy `Numeric(10,4)` truncated values such as `0.000789`), and `network` / `battery` / `charging` / `device_temp`.
+Append-only, unique `(station_id, observed_at)`. Columns: `id`, `station_id`, `observed_at` (sensor time, UTC), `ingested_at` (storage time, UTC), `source_recorded_at_raw`, `source`, `source_route` (now `GET /api/v1/timeseries?station={station_id}`), `normalizer_version` (now `2`), `quality_flags`, `raw_payload`, the 35 metrics (double precision), and `network` / `battery` / `charging` / `device_temp`.
 
-The table is append-only with unique `(station_id, observed_at)`. `environment.ingestion_runs` holds per-cycle health.
+Migration `0018_aeron_api_v1` adds, all nullable:
+
+- `fetched_at`: when the worker received the response.
+- `source_epoch_ms`: Aeron's `epoch_ms` for the reading.
+- `unmapped_values`: parameter IDs not in the local map, with their raw values.
+
+Rows stored before `0018` keep their values and have `NULL` in the new columns. Nothing is dropped, rewritten or backfilled.
 
 ## API (main API, port 8000 internally)
 
 | Route | Behaviour |
 | --- | --- |
-| `GET /api/environment/latest?station_id=` | Newest persisted reading plus server-side `freshness`; 404 if none. Response is a superset of the legacy flat shape; `recorded_at` and `source_recorded_at` equal `observed_at`. |
-| `GET /api/environment/history?station_id=&start=&end=&limit=` | Newest first; `limit` 1–1000 (default 100); inverted range → 422 |
-| `GET /api/environment/status` | `freshness`, `age_seconds`, `observed_at`, `ingested_at`, thresholds, last sync outcome and error code, last successful sync, DB connectivity |
+| `GET /api/environment/latest?station_id=` | Newest persisted reading plus server-side `freshness`; 404 if none. Now also includes `fetched_at` (`null` on older rows). |
+| `GET /api/environment/history?station_id=&start=&end=&limit=` | Newest first; `limit` 1–1000 (default 100); inverted range → 422. |
+| `GET /api/environment/status` | `freshness`, `age_seconds`, `observed_at`, `ingested_at`, thresholds, last sync outcome and error code, last successful sync, DB connectivity. |
+| `GET /api/environment/parameters` | New. Static parameter metadata (ID, field, name, unit, category). No upstream call. |
 
-All three send `Cache-Control: no-store`. There is no POST or sync route.
+All routes send `Cache-Control: no-store`. There is no POST or sync route.
 
-## UI compatibility changes
+The Weather UI needs no change: it uses the server's `freshness` field. Its built-in 10/30-minute boundary is only a fallback for a response without `freshness`, which this API never sends.
 
-The layout, cards, charts, labels and styling are unchanged.
+## Configuration
 
-- **Staging `weather.js`:** now uses same-origin `/api/environment` (the hard-coded `http://{host}:8000/api` and the public `POST /api/sync/aeron` are removed). "Sync Now" became "Refresh" and only re-reads. Status comes from server `freshness`. The station time shows in IST regardless of the viewer's timezone, and the footer reads "Measured:" instead of "Data fetched:".
-- **Production `weather.js`:** status comes from server `freshness`, with the 10-minute boundary corrected in the fallback.
-- **`serve-staging.py`:** allowlists the three GET routes only.
+| Variable | Required | Default |
+| --- | --- | --- |
+| `DATABASE_URL` | yes | — |
+| `AERON_STATION_ID` | yes | — |
+| `AERON_API_KEY` | yes (secret) | — |
+| `AERON_API_BASE_URL` | no | `https://live3.aeronsystems.com/api/v1` |
+| `AERON_POLL_INTERVAL_SECONDS` | no | `300` (clamped to 120–3600) |
+| `AERON_CONNECT_TIMEOUT_SECONDS` | no | `5` |
+| `AERON_READ_TIMEOUT_SECONDS` | no | `15` |
+| `AERON_MAX_ATTEMPTS` | no | `3` |
 
-## Retired
+No longer used: `AERON_USERNAME`, `AERON_PASSWORD`, `AERON_SESSION_COOKIE`, `AERON_DASHBOARD_URL`, `AERON_INTERNAL_BASE_URL`, `AERON_REGION`, `AERON_HTTP_TIMEOUT_SECONDS`, `AERON_LOGIN_TIMEOUT_SECONDS`, `AERON_LOGIN_URL`, `AERON_BASE_URL`.
 
-`services/aeron-api` has been removed from Git, after parity was verified and no runtime references remained. It was the separate `:8001` service, with the +330 bug, no Playwright, and an unauthenticated public sync in staging. Its ignored local files (`.venv`, caches, `aeron_dashboard.db`) were moved to `C:\K-COSMOS-PRIVATE\retired\services-aeron-api-local-20260925`. The supplied `C:\Projects\AERON-PLAYWRIGHT` source is untouched.
+## Docker
 
-## Docker changes still required (not yet made)
+The worker uses the API's `Dockerfile` with `command: ["python", "-m", "app.environment.worker"]`. It publishes no ports and needs no browser, so no extra memory for Chromium.
 
-1. **Main API:** no code or config change beyond rebuilding the image. Run `alembic upgrade head` once per environment (it adds `0012`).
-2. **Worker service:** a new image built from `services/main-api`. Base it on `python:3.12.11-slim-bookworm` with `pip install ".[aeron-worker]"` then `python -m playwright install --with-deps chromium`, or use `mcr.microsoft.com/playwright/python:v1.63.0-*`. Run it as a non-root user with `CMD ["python", "-m", "app.environment.worker"]`. Use exactly one replica, `restart: unless-stopped`, and a memory limit of at least 1 GB for Chromium. No published ports.
-3. **Environment and secrets:**
-   - Worker: `DATABASE_URL`, `AERON_STATION_ID`, `AERON_USERNAME`, `AERON_PASSWORD` (via Docker secrets or the host secret store, never in compose or the image), and optionally `AERON_POLL_INTERVAL_SECONDS` / `AERON_*_TIMEOUT_SECONDS`.
-   - No longer needed: `AERON_API_KEY`, `AERON_BASE_URL`, `AERON_LOGIN_URL`, `AERON_SESSION_COOKIE`, `AERON_TIMESTAMP_CORRECTION_MINUTES`, `AERON_INTERNAL_SYNC_TOKEN`.
-4. **Scheduling:** the long-running loop is the scheduler. The advisory lock makes extra replicas exit (code 2) instead of double-polling. A cron or one-shot `--once` job is an equivalent alternative.
-5. **PostgreSQL:** the existing server and volume; nothing new. No host port. The worker connects over the compose network.
-6. **Nginx:** route `location /api/environment/ { proxy_pass http://api:8000; }` for GET only. Do not route to `:8001`. No `/sync` path.
-7. **Monitoring:** alert when `/api/environment/status` shows `last_sync_outcome=FAILED` repeatedly, or `freshness=OFFLINE` for longer than an agreed window.
+| File | Worker service |
+| --- | --- |
+| `compose.dev.yaml` (repository root) | `environment-worker`, behind the opt-in `aeron` profile. Never started by a plain `up`. |
+| `services/main-api/compose.worker.yaml` | Add-on to `compose.yaml` for the `microcosm-local` stack. |
+| `services/main-api/compose.production.yaml` | `environment-worker`, values from `.env` on the server. |
+
+Run `alembic upgrade head` once per environment before starting the new worker, so `0018` exists.
+
+## Operations
+
+- One cycle by hand: `python -m app.environment.worker --once` (exit 0 on success, 1 on a failed cycle).
+- Alert when `/api/environment/status` shows `last_sync_outcome=FAILED` repeatedly, or `freshness=OFFLINE` for longer than an agreed window.
+- Nginx routes `/api/` (including `/api/environment/`) to the main API. There is no `/sync` path.

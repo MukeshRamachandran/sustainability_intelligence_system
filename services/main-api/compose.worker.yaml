@@ -1,8 +1,12 @@
+# Aeron REST API v1 ingestion worker (Bearer AERON_API_KEY). Same image as the
+# API; no browser. Use together with compose.yaml, which defines postgres.
+# Exactly one replica: extra copies exit on the PostgreSQL advisory lock.
 services:
   environment-worker:
     build:
       context: .
-      dockerfile: Dockerfile.worker
+      dockerfile: Dockerfile
+    command: ["python", "-m", "app.environment.worker"]
 
     environment:
       APP_ENV: development
@@ -10,15 +14,12 @@ services:
       LOG_LEVEL: INFO
 
       AERON_STATION_ID: ${AERON_STATION_ID:?AERON_STATION_ID is required}
-      AERON_INTERNAL_BASE_URL: ${AERON_INTERNAL_BASE_URL:-https://live3.aeronsystems.com/api}
-      AERON_DASHBOARD_URL: ${AERON_DASHBOARD_URL:-https://live3.aeronsystems.com/dashboard}
-      AERON_REGION: ${AERON_REGION:-india}
-      AERON_USERNAME: ${AERON_USERNAME:?AERON_USERNAME is required}
-      AERON_PASSWORD: ${AERON_PASSWORD:?AERON_PASSWORD is required}
-      AERON_SESSION_COOKIE: ${AERON_SESSION_COOKIE:-}
+      AERON_API_BASE_URL: ${AERON_API_BASE_URL:-https://live3.aeronsystems.com/api/v1}
+      AERON_API_KEY: ${AERON_API_KEY:?AERON_API_KEY is required}
       AERON_POLL_INTERVAL_SECONDS: ${AERON_POLL_INTERVAL_SECONDS:-300}
-      AERON_HTTP_TIMEOUT_SECONDS: ${AERON_HTTP_TIMEOUT_SECONDS:-15}
-      AERON_LOGIN_TIMEOUT_SECONDS: ${AERON_LOGIN_TIMEOUT_SECONDS:-30}
+      AERON_CONNECT_TIMEOUT_SECONDS: ${AERON_CONNECT_TIMEOUT_SECONDS:-5}
+      AERON_READ_TIMEOUT_SECONDS: ${AERON_READ_TIMEOUT_SECONDS:-15}
+      AERON_MAX_ATTEMPTS: ${AERON_MAX_ATTEMPTS:-3}
 
     depends_on:
       postgres:
@@ -27,3 +28,8 @@ services:
     init: true
     restart: unless-stopped
     stop_grace_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"

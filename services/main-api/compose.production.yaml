@@ -50,10 +50,13 @@ services:
       start_period: 10s
     restart: unless-stopped
 
+  # Aeron REST API v1 ingestion (Bearer AERON_API_KEY from .env). Same image as
+  # the API; no browser.
   environment-worker:
     build:
       context: .
-      dockerfile: Dockerfile.worker
+      dockerfile: Dockerfile
+    command: ["python", "-m", "app.environment.worker"]
     env_file:
       - .env
     environment:
@@ -64,6 +67,20 @@ services:
     init: true
     restart: unless-stopped
     stop_grace_period: 20s
+
+  frontend:
+    build:
+      context: ../../apps/public-dashboard-final-staging
+      dockerfile: Dockerfile
+    image: sid-public-dashboard:20261112
+    ports:
+      - "127.0.0.1:3001:80"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
 
 volumes:
   sustainability_postgres_data:
