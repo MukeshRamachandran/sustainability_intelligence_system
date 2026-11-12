@@ -33,6 +33,88 @@ document.addEventListener('DOMContentLoaded', async () => {
     return year && monthNames[month] ? `${monthNames[month]} ${year}` : String(value || '');
   }
 
+  /* Reporting-month picker. The months come from GET /api/manager/periods
+     (current month first, then the earlier months of the backend's entry
+     window). A NEW programme may use any of them; an existing programme keeps
+     the month it was saved in, so the picker is locked while one is loaded. */
+  let entryPeriods = [];
+  let selectedPeriod = null;
+  const pad = number => String(number).padStart(2, '0');
+
+  function monthBounds(period) {
+    const lastDay = new Date(period.year, period.month, 0).getDate();
+    return [`${period.year}-${pad(period.month)}-01`, `${period.year}-${pad(period.month)}-${pad(lastDay)}`];
+  }
+
+  function applyPeriod(period) {
+    selectedPeriod = period;
+    field('reporting-year').value = String(period.year);
+    field('reporting-month').value = period.id;
+    field('reporting-period-label').value = `${monthNames[period.month]} ${period.year}`;
+    const [first, last] = monthBounds(period);
+    const dateInput = field('programme-date');
+    dateInput.min = first;
+    dateInput.max = last;
+    if (dateInput.value && (dateInput.value < first || dateInput.value > last)) dateInput.value = '';
+    const select = field('reporting-period-select');
+    if (select) {
+      if (!Array.from(select.options).some(option => option.value === period.id)) {
+        // A loaded programme from a month outside the entry window: show it.
+        const option = document.createElement('option');
+        option.value = period.id;
+        option.textContent = `${monthNames[period.month]} ${period.year}`;
+        option.disabled = true;
+        select.appendChild(option);
+      }
+      select.value = period.id;
+    }
+  }
+
+  function syncPicker() {
+    const select = field('reporting-period-select');
+    if (select) select.disabled = operationInProgress || Boolean(currentProgrammeId);
+  }
+
+  function buildPeriodPicker() {
+    const label = field('reporting-period-label');
+    label.hidden = true;
+    const select = document.createElement('select');
+    select.className = 'form-control';
+    select.id = 'reporting-period-select';
+    select.setAttribute('aria-label', 'Reporting month');
+    entryPeriods.forEach(period => {
+      const option = document.createElement('option');
+      option.value = period.id;
+      option.textContent = `${monthNames[period.month]} ${period.year}${period.is_current ? ' (current)' : ''}${period.is_open ? '' : ' — closed'}`;
+      select.appendChild(option);
+    });
+    label.insertAdjacentElement('afterend', select);
+    const formLabel = document.querySelector('label[for="reporting-period-label"]');
+    if (formLabel) formLabel.setAttribute('for', 'reporting-period-select');
+    const hint = document.createElement('small');
+    hint.className = 'text-muted';
+    hint.style.display = 'block';
+    hint.style.marginTop = '4px';
+    hint.textContent = entryPeriods.length > 1
+      ? 'A new programme can be recorded in the current month or the previous months listed here.'
+      : 'Entry is open for the current month only.';
+    select.insertAdjacentElement('afterend', hint);
+    select.addEventListener('change', () => {
+      const next = entryPeriods.find(period => period.id === select.value);
+      if (!next || currentProgrammeId || operationInProgress) {
+        if (selectedPeriod) select.value = selectedPeriod.id;
+        return;
+      }
+      applyPeriod(next);
+      field('programme-date').dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    // "Reset Fields" calls form.reset(), which would snap the picker back to
+    // its first option; re-apply the selected month after it.
+    form.addEventListener('reset', () => {
+      setTimeout(() => { if (selectedPeriod) applyPeriod(selectedPeriod); syncPicker(); }, 0);
+    });
+  }
+
   function notify(message, type, operation) {
     try {
       window.KCosmosUI?.notify?.(message, type, { operation });
@@ -142,6 +224,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       field('submit-review-btn').disabled = true;
       field('modal-confirm-btn').disabled = true;
     }
+    syncPicker();
     document.dispatchEvent(new CustomEvent('kcosmos:submission-loaded', {
       detail: { submission: currentSubmissionId ? { id: currentSubmissionId, status: currentStatus } : null }
     }));
@@ -151,8 +234,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     currentProgrammeId = programme.id;
     currentSubmissionId = programme.submission_id;
     currentRowVersion = programme.row_version;
-    field('reporting-month').value = programme.reporting_period_id;
-    field('reporting-year').value = String(Number(programme.reporting_period_label.slice(0, 4)));
+    const [programmeYear, programmeMonth] = String(programme.reporting_period_label).split('-').map(Number);
+    applyPeriod(entryPeriods.find(period => period.id === programme.reporting_period_id) || {
+      id: programme.reporting_period_id, year: programmeYear, month: programmeMonth, is_current: false, is_open: false
+    });
     field('reporting-period-label').value = periodLabel(programme.reporting_period_label);
     field('programme-date').value = programme.programme_date;
     field('programme-name').value = programme.programme_name;
@@ -269,10 +354,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   try {
     const user = await KCosmos.requireRole('manager', 'outreach');
     document.querySelectorAll('#user-role-badge').forEach(item => { item.textContent = user.display_name; });
-    const currentPeriod = await KCosmos.api('/api/manager/outreach/current-period');
-    field('reporting-year').value = String(currentPeriod.year);
-    field('reporting-month').value = currentPeriod.id;
-    field('reporting-period-label').value = currentPeriod.label;
+    entryPeriods = await KCosmos.api('/api/manager/periods');
+    const currentPeriod = entryPeriods.find(period => period.is_current) || entryPeriods[0];
+    if (!currentPeriod) throw new Error('No reporting month is open for entry.');
+    buildPeriodPicker();
+    applyPeriod(currentPeriod);
+    syncPicker();
     const requested = new URLSearchParams(window.location.search).get('programme');
     if (requested) {
       const programme = await KCosmos.api(`/api/manager/outreach/programmes/${requested}`);
@@ -338,12 +425,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   field('clear-form-btn').addEventListener('click', () => {
     currentProgrammeId = null; currentSubmissionId = null; currentRowVersion = null; currentStatus = 'draft';
     rememberProgramme(null);
+    syncPicker();
     document.dispatchEvent(new CustomEvent('kcosmos:submission-loaded', { detail: { submission: null } }));
     notify('Unsaved form fields cleared. Server records were not deleted.', 'info', 'Clear form');
   });
   field('header-reset-btn').addEventListener('click', () => {
     currentProgrammeId = null; currentSubmissionId = null; currentRowVersion = null; currentStatus = 'draft';
     rememberProgramme(null);
+    syncPicker();
     document.dispatchEvent(new CustomEvent('kcosmos:submission-loaded', { detail: { submission: null } }));
   });
 });

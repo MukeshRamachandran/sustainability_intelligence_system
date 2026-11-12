@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     LOG_LEVEL: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     PUBLIC_BASE_URL: str = "http://localhost:8000"
     INSTITUTION_TIMEZONE: str = "Asia/Kolkata"
+    # Managers may enter data for the current reporting month and the months
+    # immediately before it: 3 = current month + the previous two. 1 restores
+    # current-month-only entry. Closed periods (is_open = false) stay closed.
+    MANAGER_ENTRY_WINDOW_MONTHS: int = Field(default=3, ge=1, le=12)
     ALLOWED_ORIGINS: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: ["http://localhost:3000", "http://127.0.0.1:3000"]
     )

@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from app.models.enums import OperationalDomain, SubmissionStatus
-from app.models.sustainability import MetricDefinition, Submission
+from app.models.sustainability import MetricDefinition, ReportingPeriod, Submission
 from app.schemas.auth import MessageResponse
 from app.schemas.outreach import CurrentPeriodResponse, PeriodResponse
 from app.schemas.submissions import (
@@ -24,8 +24,9 @@ from app.services.emission_factors import freeze_calculations
 from app.services.evidence import commit_temporary_evidence
 from app.services.reporting_periods import (
     current_reporting_period,
-    require_current_period_for_create,
+    manager_entry_periods,
     require_manager_mutation,
+    require_period_in_entry_window,
 )
 from app.services.submission_workflow import (
     GENERIC_DOMAINS,
@@ -49,6 +50,10 @@ def _require_domain(current: ManagerUser | CsrfUser, domain: OperationalDomain) 
     enforce_manager_domain(current, domain)
 
 
+def _entry_periods(request: Request, db: DbSession) -> list[ReportingPeriod]:
+    return manager_entry_periods(db, request.app.state.settings, request.app.state.institutional_clock)
+
+
 def _require_current_version(submission: Submission, expected_row_version: int | None) -> None:
     if expected_row_version != submission.row_version:
         raise HTTPException(
@@ -65,10 +70,9 @@ def _require_current_version(submission: Submission, expected_row_version: int |
 def list_periods(
     domain: OperationalDomain, request: Request, current: ManagerUser, db: DbSession
 ) -> list[PeriodResponse]:
+    """The months this Manager may enter: current month first, then earlier."""
     _require_domain(current, domain)
-    item = current_reporting_period(
-        db, request.app.state.settings, request.app.state.institutional_clock
-    )
+    periods = _entry_periods(request, db)
     return [
         PeriodResponse(
             id=item.id,
@@ -76,7 +80,9 @@ def list_periods(
             month=item.month,
             label=f"{item.year}-{item.month:02d}",
             is_open=item.is_open,
+            is_current=index == 0,
         )
+        for index, item in enumerate(periods)
     ]
 
 
@@ -99,15 +105,24 @@ def get_current_period(
 
 @router.get("/{domain}/metrics", response_model=list[MetricDefinitionResponse])
 def list_metrics(
-    domain: OperationalDomain, request: Request, current: ManagerUser, db: DbSession
+    domain: OperationalDomain,
+    request: Request,
+    current: ManagerUser,
+    db: DbSession,
+    reporting_period_id: UUID | None = None,
 ) -> list[MetricDefinitionResponse]:
     _require_domain(current, domain)
-    # Managers enter the current reporting month only, so the DG activity that
-    # is not that month's source (litres once the governed SFC is in force) is
-    # not offered as an input.
+    # The DG activity that is not the selected month's source (litres once the
+    # governed SFC is in force) is not offered as an input. The month is the
+    # requested entry-window month, or the current month by default.
     hidden = None
     if domain is OperationalDomain.TRANSPORT:
-        period = current_reporting_period(db, request.app.state.settings, request.app.state.institutional_clock)
+        periods = _entry_periods(request, db)
+        period = periods[0]
+        if reporting_period_id is not None:
+            period = require_period_in_entry_window(
+                reporting_period_id, periods, request.app.state.settings.MANAGER_ENTRY_WINDOW_MONTHS
+            )
         hidden = dg.superseded_manager_metric(db, period.period_start)
     metrics = db.scalars(
         select(MetricDefinition)
@@ -192,10 +207,10 @@ def create_or_save_draft(
     db: DbSession,
 ) -> GenericSubmissionResponse:
     _require_domain(current, domain)
-    period = current_reporting_period(
-        db, request.app.state.settings, request.app.state.institutional_clock
+    entry_periods = _entry_periods(request, db)
+    period = require_period_in_entry_window(
+        payload.reporting_period_id, entry_periods, request.app.state.settings.MANAGER_ENTRY_WINDOW_MONTHS
     )
-    require_current_period_for_create(payload.reporting_period_id, period)
     submission = db.scalar(
         select(Submission).where(
             Submission.domain == domain,
@@ -220,7 +235,7 @@ def create_or_save_draft(
         raise HTTPException(status_code=409, detail="This reporting-period submission belongs to another manager.")
     if not created:
         _require_current_version(submission, payload.expected_row_version)
-    require_manager_mutation(submission, period)
+    require_manager_mutation(submission, entry_periods)
     save_values(db, submission, payload.values, payload.remarks, payload.waste_items)
     add_audit_log(
         db,
@@ -249,10 +264,7 @@ def update_draft(
     _require_domain(current, domain)
     submission = get_owned_submission(db, submission_id, current.user_id, domain, for_update=True)
     _require_current_version(submission, payload.expected_row_version)
-    period = current_reporting_period(
-        db, request.app.state.settings, request.app.state.institutional_clock
-    )
-    require_manager_mutation(submission, period)
+    require_manager_mutation(submission, _entry_periods(request, db))
     save_values(db, submission, payload.values, payload.remarks, payload.waste_items)
     add_audit_log(
         db,
@@ -279,10 +291,7 @@ def submit_for_review(
 ) -> MessageResponse:
     _require_domain(current, domain)
     submission = get_owned_submission(db, submission_id, current.user_id, domain, for_update=True)
-    period = current_reporting_period(
-        db, request.app.state.settings, request.app.state.institutional_clock
-    )
-    require_manager_mutation(submission, period)
+    require_manager_mutation(submission, _entry_periods(request, db))
     submit(db, submission, current.user_id)
     freeze_calculations(db, submission)
     committed_evidence = commit_temporary_evidence(db, submission)

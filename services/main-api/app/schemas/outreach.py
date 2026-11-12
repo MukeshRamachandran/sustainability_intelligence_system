@@ -35,6 +35,7 @@ class PeriodResponse(BaseModel):
     month: int
     label: str
     is_open: bool
+    is_current: bool = False
 
 
 class CurrentPeriodResponse(PeriodResponse):

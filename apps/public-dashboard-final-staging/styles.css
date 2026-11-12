@@ -142,7 +142,11 @@ body::before {
   mix-blend-mode: multiply;
 }
 
-#bg-waste { background-image: url('media/waste_2bg.png'); background-repeat: no-repeat; }
+/* Overview: falling-leaves frame. Waste: recyclable-materials frame. Both are
+   edge-decorated with an empty centre, so cover + center keeps the artwork
+   framing the content at every viewport width. */
+#bg-overview { background-image: url('media/overview-bg.jpg?v=1'); background-repeat: no-repeat; background-position: center center; }
+#bg-waste { background-image: url('media/waste-materials-bg.jpg?v=1'); background-repeat: no-repeat; background-position: center center; }
 #bg-water { background-image: url('media/water-bg.png?v=2'); }
 #bg-energy { background-image: url('media/energy-bg.png'); }
 #bg-ghg { background-image: url('media/ghgg.png'); }
@@ -156,7 +160,7 @@ body[data-page="water"] #bg-water { opacity: 0.8; }
 body[data-page="energy"] #bg-energy { opacity: 0.8; }
 body[data-page="ghg"] #bg-ghg { opacity: 0.8; }
 body[data-page="outreach"] #bg-outreach { opacity: 0.8; }
-body[data-page="overview"] #bg-main { opacity: 0.8; }
+body[data-page="overview"] #bg-overview { opacity: 0.8; }
 body[data-page="about"] #bg-main { opacity: 0.8; }
 body[data-page="weather"] #bg-main { opacity: 0.8; }
 

@@ -459,11 +459,13 @@ test('generic Manager save and submit wiring is single-owner and persistence-saf
   assert.equal((manager.match(/replaceButton\('submit-btn'/g) || []).length, 1);
   assert.match(manager, /input\.value\.trim\(\) === '' \? null : input\.value/);
   assert.match(manager, /byCode\.get\(metricCode\) \?\? ''/);
-  assert.match(manager, /request\('\/current-period'\)/);
+  assert.match(manager, /request\('\/periods'\)/);
   assert.match(manager, /expected_row_version = currentSubmission\.row_version/);
   assert.match(manager, /stale_submission/);
   assert.match(manager, /Refresh submission/);
-  assert.doesNotMatch(manager, /new Date|searchParams\.set\('reporting_period_id'/);
+  assert.doesNotMatch(manager, /new Date\s*\(\s*\)/);
+  assert.match(manager, /url\.searchParams\.set\('reporting_period_id', period\.id\)/);
+  assert.match(manager, /entryPeriods\.find\(period => period\.id === requested\)/);
   const submit = manager.slice(manager.indexOf('async function submitForReview'));
   assert.ok(submit.indexOf("/submit`, { method: 'POST' }") < submit.indexOf('await loadCurrent()'));
   assert.ok(submit.indexOf('await loadCurrent()') < submit.indexOf("showSuccess('Submitted for review.'"));
@@ -475,12 +477,12 @@ test('Outreach save/submit restores by programme URL and uses the safe notifier'
   assert.match(outreach, /searchParams\.set\('programme', programmeId\)/);
   assert.match(outreach, /ensureDraft: async \(\) => \{/);
   assert.match(outreach, /KCosmosUI\?\.notify/);
-  assert.match(outreach, /\/api\/manager\/outreach\/current-period/);
+  assert.match(outreach, /KCosmos\.api\('\/api\/manager\/periods'\)/);
   assert.match(outreach, /expected_row_version = currentRowVersion/);
   assert.match(outreach, /stale_submission/);
   assert.match(outreach, /Refresh submission/);
   assert.doesNotMatch(outreach, /parseInt|parseFloat/);
-  assert.doesNotMatch(outreach, /new Date/);
+  assert.doesNotMatch(outreach, /new Date\s*\(\s*\)/);
   assert.match(outreach, /await KCosmos\.api\(`\/api\/manager\/outreach\/programmes\/\$\{currentProgrammeId\}`\)/);
 });
 

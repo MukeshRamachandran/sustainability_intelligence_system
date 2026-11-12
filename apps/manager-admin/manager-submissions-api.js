@@ -82,6 +82,11 @@
   };
   const editableStatuses = new Set(['draft', 'correction_requested']);
   const map = fieldMaps[domain];
+  const monthNames = ['', 'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December'];
+  // Months the backend allows for entry (GET /periods): current month first,
+  // then the earlier months of the entry window. Never computed in the browser.
+  let entryPeriods = [];
   let currentPeriod = null;
   let definitions = new Map();
   let currentSubmission = null;
@@ -210,6 +215,10 @@
       if (['reporting-period-label', 'year', 'month'].includes(control.id)) return;
       control.disabled = !enabled;
     });
+    // The month picker stays usable on a read-only month so the Manager can
+    // move to another month; it is locked only while a save/submit runs.
+    const periodSelect = document.getElementById('reporting-period-select');
+    if (periodSelect) periodSelect.disabled = operationInProgress;
     document.getElementById('save-draft-btn').disabled = !enabled;
     document.getElementById('submit-btn').disabled = !enabled;
     document.getElementById('reset-btn').disabled = !enabled;
@@ -326,6 +335,95 @@
     });
   }
 
+  function periodText(period) {
+    return `${monthNames[period.month]} ${period.year}`;
+  }
+
+  async function loadDefinitions(period) {
+    const items = await request(`/metrics?reporting_period_id=${encodeURIComponent(period.id)}`);
+    const loaded = new Map(items.map(item => [item.code, item]));
+    for (const metricCode of Object.values(map)) {
+      if (!loaded.has(metricCode)) throw new Error(`Backend metric definition is missing: ${metricCode}`);
+      if (!loaded.get(metricCode).manager_editable) throw new Error(`Calculated metric cannot be edited: ${metricCode}`);
+    }
+    definitions = loaded;
+  }
+
+  // Mirrors the selected month into every existing period field, so other
+  // page scripts (waste topbar, evidence) keep reading the same elements.
+  function applyPeriod(period) {
+    currentPeriod = period;
+    document.getElementById('year').value = String(period.year);
+    document.getElementById('month').value = period.id;
+    document.getElementById('reporting-period-label').value = periodText(period);
+    document.getElementById('ay').innerHTML = `<option>${period.year}-${period.year + 1}</option>`;
+    const select = document.getElementById('reporting-period-select');
+    if (select) select.value = period.id;
+    // Topbar "AY: … | <month>" shows the month being entered, not a fixed one.
+    const topbarSpans = document.querySelectorAll('.topbar .current-period span');
+    if (topbarSpans.length === 3) {
+      topbarSpans[0].textContent = `AY: ${period.year}–${period.year + 1}`;
+      topbarSpans[2].textContent = periodText(period);
+    }
+    const url = new URL(window.location.href);
+    if (period.is_current) url.searchParams.delete('reporting_period_id');
+    else url.searchParams.set('reporting_period_id', period.id);
+    window.history.replaceState(null, '', url);
+  }
+
+  // Replaces the read-only "Reporting Month" box with a picker of the months
+  // the backend allows. The original input stays (hidden) and in sync.
+  function buildPeriodPicker() {
+    const label = document.getElementById('reporting-period-label');
+    label.hidden = true;
+    const select = document.createElement('select');
+    select.className = 'form-control';
+    select.id = 'reporting-period-select';
+    select.setAttribute('aria-label', 'Reporting month');
+    entryPeriods.forEach(period => {
+      const option = document.createElement('option');
+      option.value = period.id;
+      option.textContent = `${periodText(period)}${period.is_current ? ' (current)' : ''}${period.is_open ? '' : ' — closed'}`;
+      select.appendChild(option);
+    });
+    label.insertAdjacentElement('afterend', select);
+    const formLabel = document.querySelector('label[for="reporting-period-label"]');
+    if (formLabel) formLabel.setAttribute('for', 'reporting-period-select');
+    const hint = document.createElement('small');
+    hint.className = 'text-muted';
+    hint.style.display = 'block';
+    hint.style.marginTop = '4px';
+    hint.textContent = entryPeriods.length > 1
+      ? 'You can enter the current month or the previous months listed here.'
+      : 'Entry is open for the current month only.';
+    select.insertAdjacentElement('afterend', hint);
+    // "Reset Form" calls form.reset(), which would snap the picker and the
+    // month fields back to their defaults; re-apply the selected month after it.
+    document.getElementById('entry-form').addEventListener('reset', () => {
+      setTimeout(() => { if (currentPeriod) applyPeriod(currentPeriod); }, 0);
+    });
+    select.addEventListener('change', async () => {
+      const next = entryPeriods.find(period => period.id === select.value);
+      if (!next || next.id === currentPeriod?.id) return;
+      if (operationInProgress) { select.value = currentPeriod.id; return; }
+      const previous = currentPeriod;
+      operationInProgress = true;
+      setEditable(false);
+      try {
+        await loadDefinitions(next);
+        applyPeriod(next);
+        currentSubmission = null;
+        await loadCurrent();
+      } catch (error) {
+        applyPeriod(previous);
+        operationError(error, 'Load reporting month');
+      } finally {
+        operationInProgress = false;
+        setEditable(Boolean(!currentSubmission || editableStatuses.has(currentSubmission.status)));
+      }
+    });
+  }
+
   async function initialize() {
     try {
       const session = await getSession();
@@ -333,18 +431,16 @@
         window.location.replace(`${domain}-login.html`);
         return;
       }
-      [currentPeriod, definitions] = await Promise.all([
-        request('/current-period'),
-        request('/metrics').then(items => new Map(items.map(item => [item.code, item])))
-      ]);
-      for (const metricCode of Object.values(map)) {
-        if (!definitions.has(metricCode)) throw new Error(`Backend metric definition is missing: ${metricCode}`);
-        if (!definitions.get(metricCode).manager_editable) throw new Error(`Calculated metric cannot be edited: ${metricCode}`);
-      }
-      document.getElementById('year').value = String(currentPeriod.year);
-      document.getElementById('month').value = currentPeriod.id;
-      document.getElementById('reporting-period-label').value = currentPeriod.label;
-      document.getElementById('ay').innerHTML = `<option>${currentPeriod.year}-${currentPeriod.year + 1}</option>`;
+      entryPeriods = await request('/periods');
+      if (!entryPeriods.length) throw new Error('No reporting month is open for entry.');
+      // A link from Submission History may name a month; it is honoured only
+      // when that month is inside the backend's entry window.
+      const requested = new URLSearchParams(window.location.search).get('reporting_period_id');
+      const initial = entryPeriods.find(period => period.id === requested)
+        || entryPeriods.find(period => period.is_current) || entryPeriods[0];
+      await loadDefinitions(initial);
+      buildPeriodPicker();
+      applyPeriod(initial);
       replaceButton('save-draft-btn', 'Save Draft', saveDraft);
       replaceButton('submit-btn', 'Submit for Review', submitForReview);
       (calculatedFields[domain] || []).forEach(id => { document.getElementById(id).readOnly = true; });

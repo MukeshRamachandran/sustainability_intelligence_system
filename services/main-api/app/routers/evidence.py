@@ -31,7 +31,7 @@ from app.services.evidence import (
     validate_attachment,
 )
 from app.services.evidence_repository import EvidenceRepositoryFilters, search_committed_evidence
-from app.services.reporting_periods import current_reporting_period, require_manager_mutation
+from app.services.reporting_periods import manager_entry_periods, require_manager_mutation
 from app.storage.evidence import evidence_path, remove_new_file, store_upload
 
 manager_router = APIRouter(prefix="/api/manager", tags=["manager evidence"])
@@ -86,10 +86,10 @@ async def upload_manager_evidence(
     enforce_manager_domain(current, domain)
     submission = get_manager_submission(db, submission_id, current.user_id, domain)
     require_evidence_editable(submission)
-    period = current_reporting_period(
-        db, request.app.state.settings, request.app.state.institutional_clock
+    require_manager_mutation(
+        submission,
+        manager_entry_periods(db, request.app.state.settings, request.app.state.institutional_clock),
     )
-    require_manager_mutation(submission, period)
     replaced = None
     if replaces_evidence_id is not None:
         replaced = get_submission_evidence(db, submission.id, replaces_evidence_id)
@@ -181,10 +181,10 @@ def delete_manager_evidence(
     enforce_manager_domain(current, domain)
     submission = get_manager_submission(db, submission_id, current.user_id, domain)
     require_evidence_editable(submission)
-    period = current_reporting_period(
-        db, request.app.state.settings, request.app.state.institutional_clock
+    require_manager_mutation(
+        submission,
+        manager_entry_periods(db, request.app.state.settings, request.app.state.institutional_clock),
     )
-    require_manager_mutation(submission, period)
     evidence = get_submission_evidence(db, submission.id, evidence_id)
     storage_key = remove_temporary_evidence(db, evidence)
     db.commit()

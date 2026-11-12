@@ -2110,22 +2110,29 @@ function syncMonthOptions(preferred) {
   monthFilter.value = options.some(option => option.value === keep) ? keep : (options[0]?.value || 'all');
   monthFilter.dataset.year = yearFilter.value;
 }
-/* The dashboard opens on this period every time (owner's choice), instead of
-   the backend's default_key - as long as the timeline offers it. If it ever
-   does not, the backend default applies as before. */
-const OPENING_PERIOD_KEY = '2025-FY';
+/* The dashboard opens on the latest data: the backend's default_key, which is
+   the newest month reported by at least two operational domains (so a month
+   that only one domain has reported never becomes the opening view). It moves
+   forward on its own as new months are published or imported - nothing here
+   names a fixed period. Without a default_key it opens on the newest year. */
 function populatePeriodControls(defaultKey) {
   if (!periodSelector.length) return;
   const offered = key => periodSelector.some(item => item.options.some(option => option.key === key));
-  if (offered(OPENING_PERIOD_KEY)) defaultKey = OPENING_PERIOD_KEY;
+  if (defaultKey && !offered(defaultKey)) defaultKey = null;
   // ?period=2025-FY / 2025-03 deep-links a period, but only one the timeline offers.
   const requested = new URLSearchParams(window.location.search).get('period');
   if (requested && offered(requested)) {
     defaultKey = requested;
   }
+  // Newest year first in the Year list.
+  const newestFirst = [...periodSelector].sort((a, b) => Number(b.year) - Number(a.year));
   yearFilter.innerHTML = '';
-  periodSelector.forEach(item => yearFilter.add(new Option(String(item.year), String(item.year))));
-  const [year, rest] = defaultKey ? [defaultKey.slice(0, 4), defaultKey.slice(5)] : [String(periodSelector[periodSelector.length - 1].year), ''];
+  newestFirst.forEach(item => yearFilter.add(new Option(String(item.year), String(item.year))));
+  if (!defaultKey) {
+    const months = newestFirst[0].options.filter(option => option.granularity === 'MONTHLY');
+    defaultKey = months.length ? months[months.length - 1].key : null;
+  }
+  const [year, rest] = defaultKey ? [defaultKey.slice(0, 4), defaultKey.slice(5)] : [String(newestFirst[0].year), ''];
   yearFilter.value = year;
   const aggregateValue = monthOptionsFor(year).find(option => option.value === `agg:${defaultKey}`);
   syncMonthOptions(/^\d{2}$/.test(rest) ? String(Number(rest) - 1) : (aggregateValue ? aggregateValue.value : 'all'));

@@ -23,8 +23,9 @@ from app.services.evidence import commit_temporary_evidence
 from app.services.outreach import correction_reason, submission_snapshot
 from app.services.reporting_periods import (
     current_reporting_period,
-    require_current_period_for_create,
+    manager_entry_periods,
     require_manager_mutation,
+    require_period_in_entry_window,
 )
 
 router = APIRouter(prefix="/api/manager", tags=["manager outreach"])
@@ -37,6 +38,10 @@ def _request_id(request: Request) -> str | None:
 
 def _require_outreach(current: ManagerUser | CsrfUser) -> None:
     enforce_manager_domain(current, OperationalDomain.OUTREACH)
+
+
+def _entry_periods(request: Request, db: DbSession) -> list[ReportingPeriod]:
+    return manager_entry_periods(db, request.app.state.settings, request.app.state.institutional_clock)
 
 
 def _owned_programme(
@@ -78,9 +83,6 @@ def _programme_response(
 @router.get("/periods", response_model=list[PeriodResponse])
 def list_periods(request: Request, current: ManagerUser, db: DbSession) -> list[PeriodResponse]:
     _require_outreach(current)
-    item = current_reporting_period(
-        db, request.app.state.settings, request.app.state.institutional_clock
-    )
     return [
         PeriodResponse(
             id=item.id,
@@ -88,7 +90,9 @@ def list_periods(request: Request, current: ManagerUser, db: DbSession) -> list[
             month=item.month,
             label=f"{item.year}-{item.month:02d}",
             is_open=item.is_open,
+            is_current=index == 0,
         )
+        for index, item in enumerate(_entry_periods(request, db))
     ]
 
 
@@ -139,10 +143,10 @@ def create_programme(
     db: DbSession,
 ) -> OutreachProgrammeResponse:
     _require_outreach(current)
-    period = current_reporting_period(
-        db, request.app.state.settings, request.app.state.institutional_clock
+    entry_periods = _entry_periods(request, db)
+    period = require_period_in_entry_window(
+        payload.reporting_period_id, entry_periods, request.app.state.settings.MANAGER_ENTRY_WINDOW_MONTHS
     )
-    require_current_period_for_create(payload.reporting_period_id, period)
     if not period.period_start <= payload.programme_date <= period.period_end:
         raise HTTPException(status_code=422, detail="Programme date must be inside the reporting period.")
     submission = db.scalar(
@@ -167,7 +171,7 @@ def create_programme(
             raise HTTPException(status_code=409, detail="An active submission already exists for this period.") from exc
     if submission.manager_user_id != current.user_id:
         raise HTTPException(status_code=409, detail="This reporting-period submission belongs to another manager.")
-    require_manager_mutation(submission, period)
+    require_manager_mutation(submission, entry_periods)
     values = payload.model_dump(exclude={"reporting_period_id"})
     programme = OutreachProgramme(submission_id=submission.id, **values)
     db.add(programme)
@@ -207,10 +211,7 @@ def update_programme(
                 "current_row_version": submission.row_version,
             },
         )
-    authoritative_period = current_reporting_period(
-        db, request.app.state.settings, request.app.state.institutional_clock
-    )
-    require_manager_mutation(submission, authoritative_period)
+    require_manager_mutation(submission, _entry_periods(request, db))
     if not period.period_start <= payload.programme_date <= period.period_end:
         raise HTTPException(status_code=422, detail="Programme date must be inside the reporting period.")
     for key, value in payload.model_dump(exclude={"reporting_period_id", "expected_row_version"}).items():
@@ -236,10 +237,7 @@ def update_programme(
 def delete_programme(programme_id: UUID, request: Request, current: CsrfUser, db: DbSession) -> Response:
     _require_outreach(current)
     programme, submission, _period = _owned_programme(db, current.user_id, programme_id, for_update=True)
-    authoritative_period = current_reporting_period(
-        db, request.app.state.settings, request.app.state.institutional_clock
-    )
-    require_manager_mutation(submission, authoritative_period)
+    require_manager_mutation(submission, _entry_periods(request, db))
     db.delete(programme)
     submission.row_version += 1
     add_audit_log(
@@ -268,10 +266,7 @@ def submit_outreach(submission_id: UUID, request: Request, current: CsrfUser, db
     )
     if submission is None:
         raise HTTPException(status_code=404, detail="Outreach submission not found.")
-    period = current_reporting_period(
-        db, request.app.state.settings, request.app.state.institutional_clock
-    )
-    require_manager_mutation(submission, period)
+    require_manager_mutation(submission, _entry_periods(request, db))
     programmes = db.scalars(select(OutreachProgramme).where(OutreachProgramme.submission_id == submission.id)).all()
     if not programmes:
         raise HTTPException(status_code=422, detail="At least one programme is required.")
